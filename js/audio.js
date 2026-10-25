@@ -149,16 +149,25 @@
   A.brick = (note, p, pan) => {
     if (!A.ready || !gate('brick', 0.02)) return;
     const v = clamp(p / 800, 0.25, 1);
-    bell(A.note(note), 0.22 * v, pan, 0.45, 3.5, 1.6);
-    noise({ f: 2500, q: 3, d: 0.025, vol: 0.12 * v, pan });
+    //bell(A.note(note), 0.22 * v, pan, 0.45, 3.5, 1.6);
+    //noise({ f: 2500, q: 3, d: 0.025, vol: 0.12 * v, pan });
+    // глухой стук, как у ракетки, но чуть выше, короче и суше — «деревянный»
+    tone({ f: 185, f2: 82, d: 0.11, vol: 0.5 * v, pan, glide: 0.08 });
+    tone({ f: 520, f2: 330, d: 0.045, vol: 0.14 * v, pan, type: 'triangle' });
+    noise({ f: 1400, q: 1.4, d: 0.025, vol: 0.22 * v, pan });
   };
   A.brickBreak = (note, p, pan, big) => {
     if (!A.ready || !gate('break', 0.015)) return;
     const v = clamp(p / 800, 0.35, 1);
-    bell(A.note(note), 0.26 * v, pan, 0.8, 2.0, 2.4);
-    bell(A.note(note + 2), 0.1 * v, pan, 0.6, 3.01, 1.2);
-    noise({ f: 2600, f2: 900, q: 0.9, d: big ? 0.35 : 0.2, vol: 0.32 * v, pan });
-    noise({ f: 6000, q: 0.7, d: 0.08, vol: 0.12 * v, pan, ft: 'highpass' });
+    //bell(A.note(note), 0.26 * v, pan, 0.8, 2.0, 2.4);
+    //bell(A.note(note + 2), 0.1 * v, pan, 0.6, 3.01, 1.2);
+    //noise({ f: 2600, f2: 900, q: 0.9, d: big ? 0.35 : 0.2, vol: 0.32 * v, pan });
+    //noise({ f: 6000, q: 0.7, d: 0.08, vol: 0.12 * v, pan, ft: 'highpass' });
+    // тот же стук, а под ним — глухой осыпающийся шорох: шум без верхов, гаснущий вниз
+    tone({ f: 175, f2: 66, d: 0.14, vol: 0.55 * v, pan, glide: 0.1 });
+    tone({ f: 480, f2: 280, d: 0.05, vol: 0.14 * v, pan, type: 'triangle' });
+    noise({ f: 1400, q: 1.2, d: 0.03, vol: 0.22 * v, pan });
+    noise({ ft: 'lowpass', f: 1100, f2: 220, q: 0.7, a: 0.008, d: big ? 0.22 : 0.14, vol: 0.16 * v, pan });
   };
   A.steel = (p, pan) => {
     if (!A.ready || !gate('steel', 0.04)) return;
@@ -183,6 +192,36 @@
     if (!A.ready || !gate('shard', 0.035)) return;
     bell(A.note(4 + Math.min(n - 1, 9)), 0.11, pan, 0.3, 4.0, 0.9);
     noise({ f: 7000, q: 1.5, d: 0.02, vol: 0.05, pan, ft: 'highpass' });
+  };
+  // Гул магнита ракетки — один непрерывный голос, создаётся при первом включении. Шум без высоты тона, чтобы
+  // не спорить с музыкой; громкость, окраска и дрожание плавно следуют за силой магнита k (0…1).
+  let hum = null;
+  A.magnet = (k, pan) => {
+    if (!A.ready || (!hum && k < 0.01)) return;
+    if (!hum) {
+      const src = ctx.createBufferSource(), f = ctx.createBiquadFilter(), trem = ctx.createGain();
+      const lfo = ctx.createOscillator(), depth = ctx.createGain(), sub = ctx.createOscillator(), sg = ctx.createGain();
+      src.buffer = noiseBuf; src.loop = true;
+      f.type = 'bandpass'; f.Q.value = 5; f.frequency.value = 300;
+      lfo.frequency.value = 9; depth.gain.value = 0.35; trem.gain.value = 0.65;
+      lfo.connect(depth); depth.connect(trem.gain);
+      sub.frequency.value = 48; sg.gain.value = 0.25;
+      const g = ctx.createGain(), p = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+      g.gain.value = 0;
+      src.connect(f); f.connect(trem); sub.connect(sg); sg.connect(trem); trem.connect(g);
+      if (p) { g.connect(p); p.connect(sfx); } else g.connect(sfx);
+      src.start(); lfo.start(); sub.start();
+      hum = { g, f, p, k: 0, pan: 0 };
+    }
+    k = A.playing && k >= 0.01 ? k : 0;
+    pan = clamp(pan || 0, -1, 1);
+    // параметры трогаем, только когда что-то заметно изменилось, и обязательно — при выключении
+    if (Math.abs(k - hum.k) < 0.01 && Math.abs(pan - hum.pan) < 0.05 && (k > 0 || hum.k === 0)) return;
+    hum.k = k; hum.pan = pan;
+    const t = ctx.currentTime;
+    hum.g.gain.setTargetAtTime(0.09 * k, t, 0.03);
+    hum.f.frequency.setTargetAtTime(220 + 700 * k, t, 0.05);
+    if (hum.p) hum.p.pan.setTargetAtTime(pan, t, 0.05);
   };
   A.laser = pan => {
     if (!A.ready || !gate('laser', 0.05)) return;
@@ -211,6 +250,9 @@
     const t = ctx.currentTime;
     [0, 4, 7].forEach((s, i) => tone({ t: t + i * 0.08, f: mtof(57 + s), d: 0.5, vol: 0.15, type: 'triangle' }));
   };
+
+  // Что слышно прямо сейчас: часы звука за вычетом задержки вывода (по ним цветомузыка попадает в такт)
+  A.now = () => (ctx ? ctx.currentTime - (ctx.outputLatency || ctx.baseLatency || 0) : 0);
 
   // Новая песня (новый стиль, темп, тональность) — на каждом уровне
   A.newSong = () => AK.Music.newSong();

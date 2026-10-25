@@ -65,6 +65,7 @@
   // ---------- Игра ----------
   let playing = false;
   function start() {
+    showSettings(false);
     A.init();
     A.playing = true;
     const seed = Number.isFinite(urlSeed) ? urlSeed : randomSeed();
@@ -81,6 +82,13 @@
     if (p) AK.UI.banner('ПАУЗА', 'P — продолжить', 1e6);
     else { clearTimeout(bannerTimer); banner.style.opacity = 0; }
   }
+  // Панель настроек (settings.js). Посреди игры ставит её на паузу без баннера — и снимает, когда закрыта.
+  let settingsPause = false;
+  function showSettings(on) {
+    on = AK.Settings.toggle(on);
+    if (on && playing && !G.demo && !G.paused) { G.paused = true; A.playing = false; settingsPause = true; }
+    else if (!on && settingsPause) { settingsPause = false; if (G.paused) setPaused(false); }
+  }
 
   // ---------- Ввод ----------
   const keys = {};
@@ -91,11 +99,15 @@
   window.addEventListener('pointermove', e => { G.input.x = toWorldX(e.clientX); });
   canvas.addEventListener('pointerdown', e => {
     G.input.x = toWorldX(e.clientX);
+    if (AK.Settings.open) { showSettings(false); return; } // клик мимо панели закрывает её
     if (G.paused) { setPaused(false); return; }
     G.input.fire = true; G.input.held = true;
   });
   window.addEventListener('pointerup', () => { G.input.held = false; });
-  overlay.addEventListener('pointerdown', e => { e.preventDefault(); start(); });
+  overlay.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    if (AK.Settings.open) showSettings(false); else start();
+  });
 
   window.addEventListener('keydown', e => {
     keys[e.code] = true;
@@ -107,7 +119,9 @@
         G.input.held = true;
         break;
       case 'Enter': if (!overlay.classList.contains('hidden')) start(); break;
-      case 'KeyP': case 'Escape': setPaused(!G.paused); break;
+      case 'Escape': if (AK.Settings.open) { showSettings(false); break; } // fallthrough
+      case 'KeyP': setPaused(!G.paused); break;
+      case 'KeyO': if (!e.repeat) showSettings(); break;
       case 'KeyM': {
         const on = A.toggleMusic();
         AK.UI.banner(on ? 'МУЗЫКА ВКЛ' : 'МУЗЫКА ВЫКЛ', '', 1.2);

@@ -61,6 +61,25 @@
   }
   #overlay .score { font-size: 1.6em; margin: .2em 0 1.5em; letter-spacing: .15em; }
   @keyframes pulse { 0%,100% { opacity: .45 } 50% { opacity: 1 } }
+  #settings {
+    position: absolute; right: 3%; top: 8%; width: 18em; padding: .9em 1.1em 1em; box-sizing: border-box;
+    background: rgba(6,9,22,.9); border: 1px solid rgba(140,180,255,.22); border-radius: .7em;
+    box-shadow: 0 0 2em rgba(0,0,0,.6); font-size: .8em; letter-spacing: .04em; cursor: default;
+    transition: opacity .2s;
+  }
+  #settings.hidden { opacity: 0; pointer-events: none; }
+  #settings h3 { margin: 0 0 .9em; font-size: .85em; font-weight: 600; letter-spacing: .3em; opacity: .6; }
+  #settings .row { display: grid; grid-template-columns: 1fr 3.4em; align-items: center; column-gap: .6em; margin-bottom: .7em; }
+  #settings .row span { grid-column: 1 / -1; opacity: .85; }
+  #settings .row b { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; color: #9fd0ff; }
+  #settings .row small { grid-column: 1 / -1; opacity: .45; font-size: .82em; }
+  #settings input[type=range] { width: 100%; margin: .3em 0; accent-color: #7fb6ff; cursor: pointer; }
+  #settings .foot { display: flex; justify-content: space-between; align-items: center; margin-top: .3em; font-size: .9em; opacity: .75; }
+  #settings button {
+    font: inherit; color: inherit; background: rgba(255,255,255,.08); cursor: pointer;
+    border: 1px solid rgba(255,255,255,.25); border-radius: .4em; padding: .2em .7em;
+  }
+  #settings kbd { padding: 0 .45em; border: 1px solid rgba(255,255,255,.35); border-radius: .3em; font-family: inherit; }
   #err { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
     padding: 2em; text-align: center; font-size: 1.2em; }
 </style>
@@ -83,10 +102,11 @@
     <div class="go">КЛИК — НАЧАТЬ</div>
     <div class="keys">
       <kbd>мышь</kbd> / <kbd>←</kbd><kbd>→</kbd> ракетка &nbsp;·&nbsp;
-      <kbd>клик</kbd> / <kbd>пробел</kbd> запуск, лазер<br>
+      <kbd>клик</kbd> / <kbd>пробел</kbd> запуск, лазер &nbsp;·&nbsp; зажать — магнит: ракетка притягивает мяч<br>
       лови ракеткой осколки кирпичей — за них очки, поимки подряд умножают<br>
+      долго нет попаданий — кирпичи начинают притягивать мяч<br>
       <kbd>P</kbd> пауза &nbsp;·&nbsp; <kbd>M</kbd> музыка &nbsp;·&nbsp; <kbd>G</kbd> гравитация &nbsp;·&nbsp; <kbd>L</kbd> свет &nbsp;·&nbsp;
-      <kbd>N</kbd> пропустить уровень &nbsp;·&nbsp; <kbd>R</kbd> новая игра (новый сид)<br>
+      <kbd>N</kbd> пропустить уровень &nbsp;·&nbsp; <kbd>R</kbd> новая игра (новый сид) &nbsp;·&nbsp; <kbd>O</kbd> настройки<br>
       сид из адреса: <kbd>?seed=12345</kbd>
     </div>
   </div>
@@ -102,6 +122,8 @@
 <script src="js/audio.js"></script>
 <script src="js/levelgen.js"></script>
 <script src="js/game.js"></script>
+<script src="js/settings.js"></script>
+<script src="js/lightshow.js"></script>
 <script src="js/draw.js"></script>
 <script src="js/main.js"></script>
 </body>

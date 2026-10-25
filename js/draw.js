@@ -1,7 +1,7 @@
 'use strict';
 // Отрисовка сцены: сцена для глобального освещения (что светит и что заслоняет), сетка поля тяготения,
 // тени, кирпичи с фаской и освещением, трещины, обломки, ракетка, мячи со следом и маркерами вращения,
-// бонусы, лазеры, частицы, ударные волны, рамка поля.
+// бонусы, лазеры, частицы, ударные волны, рамка поля, прожекторы с цветомузыкой, магнит ракетки.
 (function (AK) {
   const { R, U, P } = AK;
   const { clamp } = U;
@@ -65,6 +65,24 @@
     }
   }
 
+  // ---------- Приманка ----------
+  // Кирпичи, которые сейчас тянут мяч сильнее обычного, окружены кольцами, стягивающимися к ним, — как воронка.
+  function lureRings(g, t) {
+    const I = clamp(g.lureEach / 2e7, 0, 1);
+    if (I < 0.02) return;
+    for (const k of g.bricks) {
+      if (!k.alive || k.kind === 'steel') continue;
+      const c = k.color;
+      for (let i = 0; i < 3; i++) {
+        const f = (t * 0.8 + i / 3 + k.phase) % 1;           // 0 — кольцо далеко, 1 — у самого кирпича
+        const r = k.rad * (1 + 2.6 * (1 - f) * (0.6 + 0.4 * I));
+        R.color(c[0], c[1], c[2], 0.5 * I * f * (1 - f) * 4 * 0.5, 1);
+        R.ring(k.x, k.y, r, 0.05 + 0.05 * f);
+      }
+      R.color(c[0], c[1], c[2], 0.2 * I, 1); R.soft(k.x, k.y, k.rad * 2.2);
+    }
+  }
+
   // ---------- Сцена для глобального освещения ----------
   // Рисуется до основной, в низком разрешении: rgb — излучение, альфа — заслонка. Всё рисуется непрозрачным:
   // луч останавливается на первой поверхности и забирает её свет, поэтому светить должен контур предмета.
@@ -85,9 +103,9 @@
     // прожекторы светят только в свой конус (см. gi.js); в список источников — раньше мячей, чтобы при
     // мультиболе в растр уходили лишние мячи, а не прожекторы. Источник — чуть впереди линзы, целиком в поле.
     for (const q of g.spots) {
-      const c = q.col, a = spotAng(q, t), [x, y] = spotBase(q, sb);
+      const c = q.c, a = q.a, e = E_SPOT * q.e, [x, y] = spotBase(q, sb);
       const d = SPOT_LENS + 3;
-      R.giSpot(x + Math.cos(a) * d, y + Math.sin(a) * d, 3.5, c[0] * E_SPOT, c[1] * E_SPOT, c[2] * E_SPOT, a, q.half, 0.3);
+      R.giSpot(x + Math.cos(a) * d, y + Math.sin(a) * d, 3.5, c[0] * e, c[1] * e, c[2] * e, a, q.half, 0.3);
     }
     // кирпичи заслоняют свет и слабо светятся своим цветом; взрывные тлеют оранжевым; удар вспыхивает
     for (const k of g.bricks) {
@@ -114,8 +132,8 @@
       R.color(c[0] * 1.6, c[1] * 1.6, c[2] * 1.6, 1);
       R.poly(capsule(u.x, u.y + Math.sin(u.t * 6) * 1.5, 9, 9.5, cap));
     }
-    // ракетка светится цветом уровня, торцы — красным
-    const p = g.paddle, pe = E_PADDLE * (1 + p.flash * 1.5);
+    // ракетка светится цветом уровня (под магнитом — ярче), торцы — красным
+    const p = g.paddle, pe = E_PADDLE * (1 + p.flash * 1.5 + g.magnet * 1.5);
     R.color(c2[0] * pe, c2[1] * pe, c2[2] * pe, 1);
     R.poly(capsule(p.x, p.y, p.hw, p.r, cap));
     const ce = E_CAP * (0.45 + 0.15 * Math.sin(t * 5) + p.flash * 0.5);
@@ -135,9 +153,10 @@
       R.color(q, q * 0.7, q * 0.35, 1); R.ring(w.x, w.y, w.r * (0.15 + 0.85 * e2), 0.07 + 0.1 * (1 - k));
       if (k < 0.3) { const f = (0.3 - k) * 40; R.color(f, f * 0.85, f * 0.6, 1); R.disc(w.x, w.y, w.r * 0.22); }
     }
-    // мячи — главный источник; считаются аналитически, в растр — только если их слишком много
-    const fire = g.pw.fire > 0;
-    const er = fire ? E_FIRE : E_BALL * 0.85, eg = fire ? E_FIRE * 0.55 : E_BALL * 0.92, eb = fire ? E_FIRE * 0.22 : E_BALL;
+    // мячи — главный источник; считаются аналитически, в растр — только если их слишком много.
+    // Яркость задаётся в настройках; без света мяч остаётся непрозрачным диском и отбрасывает мягкую тень.
+    const fire = g.pw.fire > 0, kl = AK.S.ballLight;
+    const er = (fire ? E_FIRE : E_BALL * 0.85) * kl, eg = (fire ? E_FIRE * 0.55 : E_BALL * 0.92) * kl, eb = (fire ? E_FIRE * 0.22 : E_BALL) * kl;
     for (const b of g.balls) {
       if (R.giLight(b.x, b.y, b.r, er, eg, eb, true)) continue;
       R.color(er, eg, eb, 1);
@@ -146,30 +165,30 @@
   }
 
   // ---------- Прожекторы ----------
-  // Корпус сидит на кромке стены; side: 1 — левая стена, -1 — правая, 0 — верхняя. Луч медленно покачивается.
-  const spotAng = (q, t) => q.ang + q.amp * Math.sin(t * q.fr + q.ph);
+  // Корпус сидит на кромке стены; side: 1 — левая стена, -1 — правая, 0 — верхняя. Угол q.a, цвет q.c
+  // и яркость q.e раз в кадр считает цветомузыка (lightshow.js).
   function spotBase(q, out) {
     out[0] = q.x - (q.side === 0 ? 0 : q.side); out[1] = q.side === 0 ? q.y - 1 : q.y;
     return out;
   }
   const sb = [0, 0];
   const SPOT_LENS = 10; // линза — на таком расстоянии от крепления вдоль оси
-  // дымка луча — на полу, под кирпичами; при глобальном освещении конус и так виден по полу, дымка едва заметна
-  function spotBeams(g, t) {
-    const k = R.gi ? 0.05 : 0.12;
+  // дымка луча — на полу, под кирпичами; при глобальном освещении конус и так виден по полу, дымка слабее
+  function spotBeams(g) {
+    const k = R.gi ? 0.07 : 0.12;
     for (const q of g.spots) {
-      const c = q.col, a = spotAng(q, t), [x, y] = spotBase(q, sb);
-      R.color(c[0], c[1], c[2], k, 1); R.color2(c[0], c[1], c[2], 0, 1);
+      const c = q.c, a = q.a, [x, y] = spotBase(q, sb);
+      R.color(c[0], c[1], c[2], k * q.e, 1); R.color2(c[0], c[1], c[2], 0, 1);
       R.beam(x + Math.cos(a) * (SPOT_LENS + 1), y + Math.sin(a) * (SPOT_LENS + 1), a, q.half * 0.9, 460);
     }
   }
   // Крепление на стене и тубус к линзе. Корпус не освещается светом поля — он у самой стены, за спиной
   // своего же луча, и в темноте его было бы не разглядеть; тени на нём — от того же условного света, что у кирпичей.
-  function spotFixtures(g, t) {
+  function spotFixtures(g) {
     const gi = R.gi;
     R.lit(0);
     for (const q of g.spots) {
-      const c = q.col, a = spotAng(q, t), ca = Math.cos(a), sa = Math.sin(a), [x, y] = spotBase(q, sb);
+      const c = q.c, a = q.a, ca = Math.cos(a), sa = Math.sin(a), [x, y] = spotBase(q, sb);
       const bx = x + ca * 2, by = y + sa * 2, lx = x + ca * SPOT_LENS, ly = y + sa * SPOT_LENS;
       const s = -sa * LX + ca * LY >= 0 ? 1 : -1, nx = -sa * s, ny = ca * s; // бок тубуса, обращённый к свету
       R.color(0.17, 0.18, 0.22, 1); R.disc(x, y, 5.5);
@@ -177,9 +196,10 @@
       R.color(0.27, 0.29, 0.35, 1); R.line(bx, by, lx, ly, 8);
       R.color(0.55, 0.58, 0.66, 1); R.line(bx + nx * 2.6, by + ny * 2.6, lx + nx * 2.6, ly + ny * 2.6, 1.5);
       R.color(0.1, 0.11, 0.13, 1); R.line(bx - nx * 3.2, by - ny * 3.2, lx - nx * 3.2, ly - ny * 3.2, 1.6);
-      R.color(c[0], c[1], c[2], gi ? 0.45 : 0.6, 1); R.soft(lx + ca * 3, ly + sa * 3, gi ? 14 : 22);
-      R.color(c[0], c[1], c[2], 1); R.line(lx - nx * 4.2, ly - ny * 4.2, lx + nx * 4.2, ly + ny * 4.2, 2.8);
-      R.color(1 - (1 - c[0]) * 0.3, 1 - (1 - c[1]) * 0.3, 1 - (1 - c[2]) * 0.3, 1);
+      R.color(c[0], c[1], c[2], (gi ? 0.45 : 0.6) * q.e, 1); R.soft(lx + ca * 3, ly + sa * 3, (gi ? 14 : 22) * (0.8 + 0.2 * q.e));
+      const lk = Math.min(1, 0.3 + 0.7 * q.e); // линза гаснет вместе с лучом
+      R.color(c[0] * lk, c[1] * lk, c[2] * lk, 1); R.line(lx - nx * 4.2, ly - ny * 4.2, lx + nx * 4.2, ly + ny * 4.2, 2.8);
+      R.color((1 - (1 - c[0]) * 0.3) * lk, (1 - (1 - c[1]) * 0.3) * lk, (1 - (1 - c[2]) * 0.3) * lk, 1);
       R.line(lx - nx * 2.6, ly - ny * 2.6, lx + nx * 2.6, ly + ny * 2.6, 1.3);
     }
   }
@@ -359,6 +379,35 @@
     }
   }
 
+  // ---------- Магнит ----------
+  // Над ракеткой сходятся к ней световые дуги, а от каждого мяча, которого она тянет, к ней бегут точки
+  function magnetFx(g, t) {
+    const m = g.magnet;
+    if (m < 0.02) return;
+    const p = g.paddle, c = g.lv.c2, top = p.y - p.r;
+    R.color(c[0], c[1], c[2], 0.14 * m, 1); R.soft(p.x, top, p.hw * 1.5);
+    for (let i = 0; i < 3; i++) {
+      const f = (t * 1.6 + i / 3) % 1, h = 6 + 52 * (1 - f), w = p.hw + p.r + 30 * (1 - f);
+      R.color(c[0], c[1], c[2], m * 0.7 * f * (1 - f) * 4 * 0.45, 1);
+      let px = p.x - w, py = top;
+      for (let s = 1; s <= 10; s++) {
+        const a = Math.PI * (1 - s / 10), x = p.x + Math.cos(a) * w, y = top - Math.sin(a) * h;
+        R.line(px, py, x, y, 2); px = x; py = y;
+      }
+    }
+    const lr = 0.5 + 0.5 * c[0], lg = 0.5 + 0.5 * c[1], lb = 0.5 + 0.5 * c[2];
+    for (const b of g.balls) {
+      if (b.stuck || b.y > p.y) continue;
+      const dx = clamp(b.x, p.x - p.hw, p.x + p.hw) - b.x, dy = top - b.y, d = Math.hypot(dx, dy);
+      const n = Math.min(14, Math.floor(d / 26));
+      for (let i = 0; i < n; i++) {
+        const u = (i + ((t * 2.2) % 1)) / n;
+        R.color(lr, lg, lb, m * 0.9 * Math.sin(Math.PI * u), 1);
+        R.disc(b.x + dx * u, b.y + dy * u, 2.3);
+      }
+    }
+  }
+
   // ---------- Ракетка ----------
   function paddle(g, t) {
     const p = g.paddle;
@@ -394,15 +443,16 @@
   function balls(g, t) {
     const fire = g.pw.fire > 0;
     const col = fire ? [1, 0.55, 0.2] : [0.6, 0.85, 1];
+    const S = AK.S, kt = 0.22 * S.ballTrail, kh = 0.32 * S.ballHalo, kb = S.ballBright; // см. settings.js
     for (const b of g.balls) {
-      const tr = b.trail, m = tr.length / 2;
+      const tr = b.trail, m = kt > 0 ? tr.length / 2 : 0;
       for (let i = 0; i < m; i++) {
         const k = (i + 1) / m;
-        R.color(col[0], col[1], col[2], 0.22 * k * k, 1);
+        R.color(col[0], col[1], col[2], kt * k * k, 1);
         R.soft(tr[i * 2], tr[i * 2 + 1], b.r * (0.5 + 1.1 * k));
       }
-      R.color(col[0], col[1], col[2], 0.32, 1); R.soft(b.x, b.y, b.r * 3.4);
-      if (fire) R.color(1, 0.72, 0.4, 1); else R.color(0.9, 0.94, 1, 1);
+      if (kh > 0) { R.color(col[0], col[1], col[2], kh, 1); R.soft(b.x, b.y, b.r * 3.4); }
+      if (fire) R.color(kb, 0.72 * kb, 0.4 * kb, 1); else R.color(0.9 * kb, 0.94 * kb, kb, 1);
       R.sphere(b.x, b.y, b.r);
       for (const off of [0, Math.PI]) {
         const a = b.ang + off;
@@ -508,21 +558,24 @@
     frame(t) {
       const g = AK.G;
       const sx = (Math.random() * 2 - 1) * g.shake, sy = (Math.random() * 2 - 1) * g.shake;
+      AK.Show.update(g, t);
       if (R.beginGI(sx, sy)) { giScene(g, t); R.endGI(SKY); }
       R.begin(t, sx, sy, g.lv.c1, g.lv.c2);
       gravityGrid(g);
-      spotBeams(g, t);
+      spotBeams(g);
       if (!R.gi) shadows(g); // при глобальном освещении тени настоящие
+      lureRings(g, t);
       for (const k of g.bricks) if (k.alive) brick(g, k, t);
       debris(g);
       powerups(g, t);
+      magnetFx(g, t);
       paddle(g, t);
       balls(g, t);
       lasers(g);
       particles(g);
       popups(g);
       frame(g, t);
-      spotFixtures(g, t);
+      spotFixtures(g);
       R.end(g.aberr, g.flash, [1, 0.92, 0.85]);
     },
   };

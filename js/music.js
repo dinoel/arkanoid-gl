@@ -5,8 +5,14 @@
 // затакт мелодии, подход баса, эффекты; партии сменяются не разом, а по очереди.
 (function (AK) {
   const { U } = AK;
-  const MG = AK.MGen, S = AK.MSynth;
+  const MG = AK.MGen, SY = AK.MSynth;
   const M = {};
+  // Синтезатор с той же API, только удары и ноты ещё и записываются для цветомузыки (см. M.lights).
+  // У ударных громкость — второй аргумент; у тональных — четвёртый, а второй и третий — нота и длительность.
+  const S = Object.create(SY);
+  const DRUM = ['kick', 'snare', 'hat', 'perc', 'crash', 'impact'], TONAL = ['bass', 'pad', 'stab', 'pluck', 'lead'];
+  for (const k of DRUM) S[k] = (...a) => { light(a[0], k, a[1]); return SY[k](...a); };
+  for (const k of TONAL) S[k] = (...a) => { light(a[0], k, a[3], a[1], a[2]); return SY[k](...a); };
   // Ручные настройки (их меняет music.html). null — решает композитор.
   const cfg = M.cfg = {
     style: null, lockStyle: false, bpm: null, key: null, mode: null, swing: null,
@@ -103,6 +109,10 @@
   // Расписанные шаги: по ним M.state() показывает то, что звучит сейчас, а не то, что уже запланировано
   const heard = [];
   let lastHeard = null;
+  // То же для цветомузыки: начала шагов со сквозным номером (по ним идёт счёт долей) и прозвучавшие ноты
+  const steps = [], lit = [];
+  let stepN = 0;
+  function light(t, name, v, m, d) { lit.push({ t, name, v, m, d }); if (lit.length > 512) lit.splice(0, 256); }
 
   const tp = () => song.tpal || song.pal; // палитра тембров (может дрейфовать)
   const clone = o => JSON.parse(JSON.stringify(o));
@@ -176,6 +186,7 @@
     };
     song.count = 0; song.sec = null; song.voicing = null; song.pending = null;
     heard.length = 0; lastHeard = null;
+    stepN = Math.ceil(stepN / 16) * 16; // новая песня — с начала такта: доли не сбиваются с чёта на нечет
     if (ctx) S.setTempo(song.bpm);
     activate(makeSection(r.chance(0.6) ? 'intro' : 'groove', null), ctx ? Math.max(ctx.currentTime, song.nextT) : 0);
   };
@@ -531,6 +542,8 @@
     const s = song.sec, st = song.step, bar = song.bar, pos = bar * 16 + st;
     heard.push({ t: t0, s, bar, st });
     if (heard.length > 256) heard.shift();
+    steps.push({ t: t0, n: stepN++, e: s.def.e, bpm: song.bpm, type: s.type, bar, len: s.len });
+    if (steps.length > 256) steps.shift();
     if (!s.next && bar >= s.len - 2) planNext(s, nextType(s.type));
     const tr = s.tr || NO_TR;
     const sd = stepDur();
@@ -554,8 +567,9 @@
 
     if (!mute.drums) playDrums(t, s, st, bar, sd);
 
-    // голоса аккорда (для пэда, стабов, арпеджио)
+    // голоса аккорда (для пэда, стабов, арпеджио); смена аккорда — и для цветомузыки: корень и длительность
     if (chStart || !song.voicing) song.voicing = MG.voice(chordMidis(ch), song.voicing, 53, 77);
+    if (chStart) light(t0, 'chord', 1, chordMidis(ch)[0], chordSpan(s, bar, st) * sd);
 
     // бас; органный пункт — корень новой секции уже звучит под последними аккордами старой
     const sb = L('bass'), pedal = pos >= tr.pedalFrom;
@@ -781,6 +795,25 @@
       },
       intensity: inten,
     };
+  };
+
+  // ---------- Для цветомузыки ----------
+  // Где песня в момент now (часы звука): сквозной номер доли с дробью (доли 0, 4, 8… — начала тактов),
+  // темп, секция (тип, энергия, такт и длина в тактах). null — музыка не играет.
+  M.clock = now => {
+    while (steps.length > 1 && steps[1].t <= now - 1) steps.shift(); // секунду истории держим
+    let c = null;
+    for (const s of steps) { if (s.t > now) break; c = s; }
+    const sd = c ? 60 / c.bpm / 4 : 0;
+    if (!c || now - c.t > 4 * sd) return null;
+    return { beat: (c.n + (now - c.t) / sd) / 4, bpm: c.bpm, e: c.e, type: c.type, bar: c.bar, len: c.len };
+  };
+  // Отдаёт fn(инструмент, громкость, нота, длительность) за каждую ноту и удар, прозвучавшие к моменту now.
+  // У ударных нота и длительность не заданы; 'chord' — смена аккорда (нота — его корень).
+  M.lights = (now, fn) => {
+    let j = 0;
+    for (const h of lit) { if (h.t <= now) fn(h.name, h.v, h.m, h.d); else lit[j++] = h; }
+    lit.length = j;
   };
 
   // Для офлайн-рендера (OfflineAudioContext): заранее расписать музыку до момента until

@@ -27,11 +27,28 @@
   const STEEL_WEAR = 15000;
   const STEEL_ROUGH = 0.07;   // разброс нормали при ударе о сталь, рад (±4°)
   const VMAX = 1.8;           // во сколько раз мяч может разогнаться в колодце относительно скорости у ракетки
+  // Приманка. Если мяч долго не попадает по кирпичам — обычно когда их осталось один-два, — бьющиеся кирпичи
+  // начинают притягивать его сильнее: к их массе добавляется прибавка, которая растёт со временем без
+  // попаданий. Она делится поровну между ними, так что последний кирпич тянет так же, как двадцать вместе.
+  // Попадание её снимает. Тянет и при выключенном притяжении кирпичей: это помощь, а не физика уровня.
+  const LURE_T0 = 6;          // с без попаданий, после которых появляется приманка
+  const LURE_RAMP = 8;        // ещё через столько секунд прибавка к Gm доходит до LURE_GM и растёт дальше как t²
+  const LURE_GM = 5e7;        // ≈ сотня обычных кирпичей; в симуляции последний кирпич сбивается в среднем за ~14 с
+  const LURE_MAX = 4;         // предел прибавки — в долях LURE_GM
+  // Магнит. Пока зажата кнопка (если нет лазера — тогда она стреляет), ракетка заворачивает мячи к себе:
+  // поворачивает их скорость к ближайшей точке своей верхней кромки, не меняя величины, — до MAG_W рад/с
+  // и вдвое медленнее на расстоянии MAG_R. Сила притяжения тут не годится: скорость мяча держит regulate,
+  // и мяч, летящий прямо вверх, только тормозился бы и тут же разгонялся снова. Ближе MAG_NEAR к ракетке
+  // магнит слабеет до нуля: иначе отскочивший мяч тут же заворачивался бы обратно и дребезжал на ней,
+  // а так описывает петлю в несколько сотен пикселей и возвращается. Ушедший ниже ракетки магнит не достаёт.
+  const MAG_W = 6, MAG_R = 300, MAG_NEAR = 160;
   const ZONE_B = AK.LevelGen.bounds.B;
 
   const G = {
     W, H, L, R: RX, T, HUD, WALL, PADDLE_Y,
     state: 'serve', demo: true, paused: false, time: 0, acc: 0, gravity: true, gview: 1,
+    dry: 0, lure: 0, lureEach: 0, // с без попаданий; прибавка к Gm всего и на каждый бьющийся кирпич
+    magnet: 0, magLock: false,    // сила магнита 0…1; кнопка, которой запустили мяч, магнит не включает
     score: 0, lives: 3, level: 1, seed: 1, combo: 0, prevGen: null,
     shake: 0, flash: 0, aberr: 0,
     bricks: [], balls: [], debris: [], particles: [], powerups: [], lasers: [], waves: [], explQ: [], popups: [],
@@ -66,27 +83,31 @@
   // Ускорение от притяжения кирпичей: a = Σ Gm·d / (d² + ε²)^{3/2}. Смягчение ε: масса распределена
   // по кирпичу, а не собрана в точку; снаружи кирпича это почти точный закон 1/r².
   // Масса мяча сокращается — от неё ускорение не зависит. Кирпичи закреплены, мяч их не сдвигает.
-  G.field = function (x, y, out) {
+  // К Gm бьющихся кирпичей добавляется приманка. base — с собственной массой кирпичей, lure — с приманкой.
+  const brickGm = (k, base, lure) => (base ? k.gm : 0) + (lure && k.kind !== 'steel' ? G.lureEach : 0);
+  G.field = function (x, y, out, base = true) {
     let ax = 0, ay = 0;
     for (const k of G.bricks) {
       if (!k.alive) continue;
       const dx = k.x - x, dy = k.y - y, d2 = dx * dx + dy * dy + k.soft2;
-      const f = k.gm / (d2 * Math.sqrt(d2));
+      const f = brickGm(k, base, true) / (d2 * Math.sqrt(d2));
       ax += dx * f; ay += dy * f;
     }
     out[0] = ax; out[1] = ay;
     return out;
   };
   // Потенциал того же поля: φ = −Σ Gm / √(d² + ε²), поле — его антиградиент.
-  G.potential = function (x, y) {
+  G.potential = function (x, y, base = true, lure = true) {
     let u = 0;
     for (const k of G.bricks) {
       if (!k.alive) continue;
       const dx = k.x - x, dy = k.y - y;
-      u -= k.gm / Math.sqrt(dx * dx + dy * dy + k.soft2);
+      u -= brickGm(k, base, lure) / Math.sqrt(dx * dx + dy * dy + k.soft2);
     }
     return u;
   };
+  // Мяч притягивается, если включено притяжение кирпичей или действует приманка
+  const pulled = () => G.gravity || G.lureEach > 0;
   G.toggleGravity = () => { G.gravity = !G.gravity; return G.gravity; };
 
   function pose(b, t) {
@@ -113,9 +134,9 @@
   function newBall(x, y, vx, vy) { return { x, y, vx, vy, w: 0, ang: 0, r: BALL_R, stuck: false, off: 0, trail: [], dead: false, flame: 0 }; }
 
   // ---------- Прожекторы ----------
-  // Разноцветные прожекторы на стенах светят конусом в поле и медленно чуть поводят лучом: только свет
-  // и украшение, мяч их не задевает. У каждого уровня свой набор, но генератор отдельный, чтобы не сдвигать
-  // случайности самого уровня.
+  // Разноцветные прожекторы на стенах светят конусом в поле: только свет и украшение, мяч их не задевает.
+  // Под музыку ими управляет цветомузыка (lightshow.js): свои цвета и покачивание — когда музыки нет.
+  // У каждого уровня свой набор, но генератор отдельный, чтобы не сдвигать случайности самого уровня.
   const SPOT_COLORS = [[1, 0.22, 0.28], [1, 0.55, 0.12], [1, 0.88, 0.25], [0.3, 1, 0.4],
     [0.15, 0.85, 1], [0.3, 0.4, 1], [0.72, 0.3, 1], [1, 0.3, 0.75]];
   function makeSpots(seed) {
@@ -128,13 +149,16 @@
       const tx = side === 1 ? rng.range(W * 0.45, RX - 60) : side === -1 ? rng.range(L + 60, W * 0.55) : rng.range(L + 80, RX - 80);
       const ty = side === 0 ? rng.range(H * 0.5, PADDLE_Y - 60) : rng.range(T + 120, PADDLE_Y - 60);
       return {
-        x, y, side, col: cols[ci++ % cols.length], ang: Math.atan2(ty - y, tx - x),
+        x, y, side, row, col: cols[ci++ % cols.length], ang: Math.atan2(ty - y, tx - x),
         half: rng.range(0.31, 0.45),                                        // полуугол конуса
         amp: rng.range(0.04, 0.08), fr: rng.range(0.25, 0.4), ph: rng.range(0, TAU), // покачивание луча
       };
     };
+    // row — ряд сверху вниз: верхние прожекторы — -1, на боковых стенах — 0…3
     const spots = [];
-    for (let i = 0; i < 4; i++) { const y = T + 100 + i * 200; spots.push(spot(L, y, 1), spot(RX, y, -1)); }
+    let row;
+    for (row = 0; row < 4; row++) { const y = T + 100 + row * 200; spots.push(spot(L, y, 1), spot(RX, y, -1)); }
+    row = -1;
     spots.push(spot(L + (RX - L) * 0.3, T, 0), spot(L + (RX - L) * 0.7, T, 0));
     return spots;
   }
@@ -145,6 +169,7 @@
     b.stuck = true; b.off = rand(-12, 12);
     G.balls = [b];
     G.serveT = 0;
+    G.dry = 0;
   }
 
   function resetPowers() { for (const k in G.pw) G.pw[k] = 0; }
@@ -163,6 +188,8 @@
     G.spots = makeSpots(lv.seedInt);
     G.debris = []; G.particles = []; G.powerups = []; G.lasers = []; G.waves = []; G.explQ = []; G.popups = [];
     G.streak = { n: 0, t: -9 };
+    G.lure = G.lureEach = 0;
+    G.magnet = 0;
     G.levelTime = 0; G.combo = 0; G.acc = 0;
     if (!G.paddle) G.paddle = newPaddle();
     resetPowers();
@@ -185,13 +212,30 @@
   // Падая в колодец, мяч честно разгоняется и с той же энергией выбирается обратно. Если срезать эту скорость,
   // мяч теряет энергию, и тяжёлая сталь захватывает его — он ложится на неё и застревает.
   function fieldSpeed(b, tgt) {
-    const v2 = tgt * tgt + 2 * (G.potential(b.x, PADDLE_Y) - G.potential(b.x, b.y));
-    return clamp(Math.sqrt(Math.max(v2, 0)), tgt * 0.7, tgt * VMAX);
+    let v2 = tgt * tgt;
+    if (G.gravity) v2 += 2 * (G.potential(b.x, PADDLE_Y, true, false) - G.potential(b.x, b.y, true, false));
+    const v = clamp(Math.sqrt(Math.max(v2, 0)), tgt * 0.7, tgt * VMAX);
+    if (!G.lureEach) return v;
+    // Приманка — без потолка скорости. С потолком у кирпича появляются круговые орбиты (на них скорость как
+    // раз круговая), и мяч часами кружит рядом, не попадая. Без потолка путь мимо кирпича — гипербола.
+    const dl = 2 * (G.potential(b.x, PADDLE_Y, false, true) - G.potential(b.x, b.y, false, true));
+    return Math.sqrt(Math.max(v * v + dl, tgt * tgt * 0.49));
+  }
+
+  // Попадание по бьющемуся кирпичу сразу снимает приманку. Мяч, который в её колодце разогнался, после удара
+  // летит с обычной скоростью — иначе он долетел бы до ракетки пулей.
+  function unlure(b) {
+    G.dry = 0;
+    if (!G.lure) return;
+    G.lure = G.lureEach = 0;
+    if (!b) return;
+    const sp = Math.hypot(b.vx, b.vy), cap = targetSpeed() * 1.15;
+    if (sp > cap) { b.vx *= cap / sp; b.vy *= cap / sp; }
   }
 
   function regulate(b, dt) {
     const sp = Math.hypot(b.vx, b.vy) || 1;
-    const tgt = G.gravity ? fieldSpeed(b, targetSpeed()) : targetSpeed();
+    const tgt = pulled() ? fieldSpeed(b, targetSpeed()) : targetSpeed();
     const ns = sp + (tgt - sp) * (1 - Math.exp(-dt * 1.8));
     b.vx *= ns / sp; b.vy *= ns / sp;
     const minVy = ns * 0.22;
@@ -250,7 +294,7 @@
 
   const SCORE = { normal: 50, strong: 60, explosive: 100, steel: 0 };
 
-  function damageBrick(k, dmg, px, py, ivx, ivy, power, nx, ny) {
+  function damageBrick(k, dmg, px, py, ivx, ivy, power, nx, ny, ball) {
     k.flash = 1;
     if (k.kind === 'steel') {
       k.mass *= Math.exp(-power / STEEL_WEAR);
@@ -260,6 +304,7 @@
       return;
     }
     k.hp -= dmg;
+    unlure(ball);
     G.combo++;
     const note = Math.min(k.note + Math.floor(G.combo / 2), 14);
     if (k.hp <= 0) destroyBrick(k, ivx, ivy, power, false, note);
@@ -274,6 +319,7 @@
   function destroyBrick(k, ivx, ivy, power, quiet, note) {
     if (!k.alive) return;
     k.alive = false;
+    unlure();
     const base = SCORE[k.kind] * (k.kind === 'strong' ? k.maxHp : 1);
     G.score += Math.round((base * (1 + G.combo * 0.15)) / 10) * 10;
     spawnDebris(k, ivx, ivy);
@@ -401,12 +447,29 @@
     inp.fire = false;
     if (G.demo) { G.serveT += dt; fire = G.serveT > 0.9; }
     const stuck = G.balls.filter(b => b.stuck);
-    if (fire && stuck.length) stuck.forEach(launch);
+    if (fire && stuck.length) { stuck.forEach(launch); G.magLock = true; }
     else if ((fire || inp.held) && G.pw.laser > 0 && p.cool <= 0 && !G.demo) {
       p.cool = 0.22;
       G.lasers.push({ x: p.x - p.hw, y: p.y - p.r - 4 }, { x: p.x + p.hw, y: p.y - p.r - 4 });
       sfx('laser', pan(p.x));
     }
+    if (!inp.held) G.magLock = false;
+    const mag = inp.held && !G.magLock && !G.demo && G.pw.laser <= 0 && G.state === 'play' && !stuck.length;
+    G.magnet += ((mag ? 1 : 0) - G.magnet) * (1 - Math.exp(-dt * 10));
+  }
+
+  // Магнит поворачивает скорость мяча к ракетке за время h (см. MAG_W)
+  function magnetTurn(b, h) {
+    const p = G.paddle, top = p.y - p.r;
+    if (b.y > top) return;
+    const dx = clamp(b.x, p.x - p.hw, p.x + p.hw) - b.x, dy = top - b.y;
+    let da = Math.atan2(dy, dx) - Math.atan2(b.vy, b.vx);
+    da -= TAU * Math.round(da / TAU);
+    const d = Math.hypot(dx, dy), near = Math.min(1, d / MAG_NEAR);
+    const w = ((MAG_W * G.magnet * near * near) / (1 + d / MAG_R)) * h;
+    const a = Math.abs(da) < w ? da : Math.sign(da || b.vx || 1) * w, c = Math.cos(a), s = Math.sin(a);
+    const vx = b.vx;
+    b.vx = vx * c - b.vy * s; b.vy = vx * s + b.vy * c;
   }
 
   function demoTarget() {
@@ -468,7 +531,7 @@
       if (!h) continue;
       const nx = h.nx, ny = h.ny, px = h.px, py = h.py, pen = h.pen;
       if (fireOn && k.kind !== 'steel') {
-        damageBrick(k, 99, px, py, b.vx, b.vy, 700, nx, ny);
+        damageBrick(k, 99, px, py, b.vx, b.vy, 700, nx, ny, b);
         continue;
       }
       b.x += nx * pen; b.y += ny * pen;
@@ -482,7 +545,7 @@
         j = P.resolve(b, b.r, nx * c - ny * s, nx * s + ny * c, cvx, cvy, 0.97, 0.22, 0.4);
       }
       if (!j) j = P.resolve(b, b.r, nx, ny, cvx, cvy, 0.97, 0.22, 0.4);
-      if (j > 0) damageBrick(k, 1, px, py, b.vx, b.vy, j, nx, ny);
+      if (j > 0) damageBrick(k, 1, px, py, b.vx, b.vy, j, nx, ny, b);
     }
   }
 
@@ -499,8 +562,9 @@
     const h = dt / n;
     for (let i = 0; i < n; i++) {
       let ax = -KM * b.w * b.vy, ay = KM * b.w * b.vx;
-      if (G.gravity) { G.field(b.x, b.y, ga); ax += ga[0]; ay += ga[1]; }
+      if (pulled()) { G.field(b.x, b.y, ga, G.gravity); ax += ga[0]; ay += ga[1]; }
       b.vx += ax * h; b.vy += ay * h;
+      if (G.magnet > 0.01) magnetTurn(b, h);
       b.x += b.vx * h; b.y += b.vy * h;
       collideBall(b);
     }
@@ -678,6 +742,13 @@
       k.flash = Math.max(0, k.flash - dt * 5);
       if (k.kind !== 'steel') rem++;
     }
+    // приманка растёт со временем без попаданий и быстро спадает после попадания
+    if (G.state === 'play' && G.balls.some(b => !b.stuck)) G.dry += dt;
+    const lx = Math.max(0, G.dry - LURE_T0) / LURE_RAMP;
+    const lt = LURE_GM * Math.min(lx * lx, LURE_MAX);
+    G.lure = lt >= G.lure ? lt : G.lure + (lt - G.lure) * (1 - Math.exp(-dt * 5));
+    if (G.lure < 1) G.lure = 0;
+    G.lureEach = rem ? G.lure / rem : 0;
     updatePaddle(dt);
     for (const b of G.balls) updateBall(b, dt);
     ballBall();
@@ -707,9 +778,10 @@
 
   G.update = function (dt) {
     G.time += dt;
-    if (G.paused) return;
+    if (G.paused) { if (G.magnet) { G.magnet = 0; sfx('magnet', 0, 0); } return; }
     G.acc = Math.min(G.acc + dt, STEP * 10);
     while (G.acc >= STEP) { step(STEP); G.acc -= STEP; }
+    sfx('magnet', G.magnet, pan(G.paddle.x));
     const f = Math.exp(-dt * 7);
     G.shake *= f; G.aberr *= f; G.flash *= Math.exp(-dt * 5);
     G.gview += ((G.gravity ? 1 : 0) - G.gview) * (1 - Math.exp(-dt * 4)); // сетка поля плавно распрямляется
