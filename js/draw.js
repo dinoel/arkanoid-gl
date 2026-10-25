@@ -295,6 +295,9 @@
       const a = clamp(d.life / 0.6, 0, 1);
       const w = P.transform(d.local, d.x, d.y, d.a, d.world);
       const [r, gg, b] = d.color;
+      // летящий осколок чуть светится — его можно поймать
+      R.lit(0);
+      if (d.rest < 0.3) { R.color(r, gg, b, (0.16 + 0.07 * Math.sin(d.age * 9 + d.x)) * a, 1); R.soft(d.x, d.y, d.r * 3.2); }
       R.lit(R.gi ? 0.9 : 0);
       R.color(r * 0.8, gg * 0.8, b * 0.8, a);
       R.poly(w);
@@ -311,6 +314,49 @@
       }
     }
     R.lit(0);
+  }
+
+  // ---------- Очки за осколки ----------
+  // Цифры — неоновый семисегментный индикатор: шрифта в WebGL нет, а отрезками они рисуются просто.
+  const SEG = { a: [0, 0, 1, 0], b: [1, 0, 1, 0.5], c: [1, 0.5, 1, 1], d: [0, 1, 1, 1], e: [0, 0.5, 0, 1], f: [0, 0, 0, 0.5], g: [0, 0.5, 1, 0.5] };
+  const DIGITS = ['abcdef', 'bc', 'abged', 'abgcd', 'fgbc', 'afgcd', 'afgedc', 'abc', 'abcdefg', 'abcdfg'];
+  // Сегмент: ореол цвета осколка и светлая сердцевина
+  function segLine(x0, y0, x1, y1, h, c, a) {
+    R.color(c[0], c[1], c[2], 0.28 * a, 1); R.line(x0, y0, x1, y1, h * 0.26);
+    R.color(Math.min(1, c[0] * 0.4 + 0.65), Math.min(1, c[1] * 0.4 + 0.65), Math.min(1, c[2] * 0.4 + 0.65), a, 1);
+    R.line(x0, y0, x1, y1, h * 0.12);
+  }
+  // Строка из цифр и «+» с центром (cx, cy) и высотой знака h
+  function segText(str, cx, cy, h, c, a) {
+    const w = h * 0.55, sp = h * 0.3, gap = h * 0.02;
+    const cw = ch => (ch === '1' ? w * 0.2 : w); // единица — одна палочка, узкая
+    let x = cx - (str.split('').reduce((s, ch) => s + cw(ch), 0) + (str.length - 1) * sp) / 2;
+    const y = cy - h / 2;
+    for (const ch of str) {
+      if (ch === '+') {
+        segLine(x, y + h * 0.5, x + w, y + h * 0.5, h, c, a);
+        segLine(x + w * 0.5, y + h * 0.5 - w * 0.5, x + w * 0.5, y + h * 0.5 + w * 0.5, h, c, a);
+      } else if (ch === '1') segLine(x + w * 0.1, y, x + w * 0.1, y + h, h, c, a);
+      else for (const sg of DIGITS[ch.charCodeAt(0) - 48]) {
+        const q = SEG[sg];
+        const x0 = x + q[0] * w, y0 = y + q[1] * h, x1 = x + q[2] * w, y1 = y + q[3] * h;
+        const l = Math.hypot(x1 - x0, y1 - y0), ux = ((x1 - x0) / l) * gap, uy = ((y1 - y0) / l) * gap;
+        segLine(x0 + ux, y0 + uy, x1 - ux, y1 - uy, h, c, a);
+      }
+      x += cw(ch) + sp;
+    }
+  }
+  // Надпись всплывает над ракеткой и держится, пока идут поимки; с серией цифры крупнее
+  function popups(g) {
+    const y0 = g.PADDLE_Y - g.paddle.r - 20;
+    for (const q of g.popups) {
+      const a = q.t < 0.7 ? 1 : Math.max(0, 1 - (q.t - 0.7) / 0.4);
+      const y = y0 - 48 * (1 - Math.exp(-q.age * 3));
+      const h = (17 + Math.min(q.n, 12) * 0.6) * (1 + 0.3 * Math.exp(-q.t * 14));
+      const c = q.color, x = clamp(q.x, g.L + 50, g.R - 50);
+      R.color(c[0], c[1], c[2], 0.14 * a, 1); R.soft(x, y, h * 2.4);
+      segText('+' + q.v, x, y, h, c, a);
+    }
   }
 
   // ---------- Ракетка ----------
@@ -474,6 +520,7 @@
       balls(g, t);
       lasers(g);
       particles(g);
+      popups(g);
       frame(g, t);
       spotFixtures(g, t);
       R.end(g.aberr, g.flash, [1, 0.92, 0.85]);

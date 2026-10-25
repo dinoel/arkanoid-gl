@@ -1,7 +1,7 @@
 'use strict';
 // Игровая логика: фиксированный шаг физики 120 Гц с подшагами для мяча (без туннелирования),
 // импульсы с трением и вращением, эффект Магнуса, притяжение кирпичей, обломки-твёрдые тела,
-// бонусы, лазеры, взрывы.
+// которые ловятся ракеткой, бонусы, лазеры, взрывы.
 (function (AK) {
   const { U, P, A } = AK;
   const { clamp, TAU } = U;
@@ -9,7 +9,13 @@
   const L = WALL, RX = W - WALL, T = HUD + WALL;
   const PADDLE_Y = 900, STEP = 1 / 120, BALL_R = 8;
   const KM = 0.0045;          // коэффициент эффекта Магнуса
-  const GRAV = 1300;          // гравитация для обломков и бонусов
+  // Осколки разбитых кирпичей падают с сопротивлением воздуха — не камнем, а так, чтобы их можно было
+  // поймать ракеткой. За каждый пойманный — очки, а поимки подряд, без долгих пауз, их умножают.
+  const SHARD_G = 1000, SHARD_DRAG = 2.6;     // скорость падения выходит на SHARD_G / SHARD_DRAG ≈ 385 px/s
+  const SHARD_FADE = 0.6;                     // с, за сколько гаснет осколок, улёгшийся на кирпич
+  const SHARD_PTS = { normal: 10, strong: 15, explosive: 20 };
+  const STREAK_GAP = 1.2;                     // с между поимками, после которых серия прерывается
+  const STREAK_MAX = 3;                       // предельный множитель серии
   // Притяжение кирпичей по закону всемирного тяготения. Масса = площадь × плотность материала;
   // постоянная подобрана так, чтобы у ракетки поле полного уровня было около 280 px/s², а у стальных
   // кирпичей мяч, пролетая вплотную, сворачивал на десятки градусов.
@@ -28,7 +34,8 @@
     state: 'serve', demo: true, paused: false, time: 0, acc: 0, gravity: true, gview: 1,
     score: 0, lives: 3, level: 1, seed: 1, combo: 0, prevGen: null,
     shake: 0, flash: 0, aberr: 0,
-    bricks: [], balls: [], debris: [], particles: [], powerups: [], lasers: [], waves: [], explQ: [],
+    bricks: [], balls: [], debris: [], particles: [], powerups: [], lasers: [], waves: [], explQ: [], popups: [],
+    streak: { n: 0, t: -9 },
     pw: { expand: 0, slow: 0, laser: 0, fire: 0 },
     input: { x: W / 2, fire: false, held: false },
   };
@@ -154,7 +161,8 @@
     G.lv = lv; G.prevGen = lv.gen;
     G.bricks = lv.bricks.map(makeBrick);
     G.spots = makeSpots(lv.seedInt);
-    G.debris = []; G.particles = []; G.powerups = []; G.lasers = []; G.waves = []; G.explQ = [];
+    G.debris = []; G.particles = []; G.powerups = []; G.lasers = []; G.waves = []; G.explQ = []; G.popups = [];
+    G.streak = { n: 0, t: -9 };
     G.levelTime = 0; G.combo = 0; G.acc = 0;
     if (!G.paddle) G.paddle = newPaddle();
     resetPowers();
@@ -291,12 +299,11 @@
       const dx = cx - k.x, dy = cy - k.y, dl = Math.hypot(dx, dy) || 1;
       const sp = rand(60, 210);
       const bvx = k.vx - k.w * (cy - k.y), bvy = k.vy + k.w * (cx - k.x);
-      const life = rand(1.6, 2.6);
       G.debris.push({
         local, world: new Float32Array(local.length), x: cx, y: cy,
         vx: bvx + (dx / dl) * sp + ivx * 0.22, vy: bvy + (dy / dl) * sp + ivy * 0.22 - 60,
-        a: k.ang, w: rand(-9, 9) + k.w, r: Math.max(3, P.radius(local) * 0.7), life, max: life,
-        color: k.color, kind: k.kind, rest: 0,
+        a: k.ang, w: rand(-9, 9) + k.w, r: Math.max(3, P.radius(local) * 0.7), life: SHARD_FADE,
+        color: k.color, kind: k.kind, pts: SHARD_PTS[k.kind] || 10, rest: 0, age: 0, caught: false,
       });
     }
     if (G.debris.length > 260) G.debris.splice(0, G.debris.length - 260);
@@ -533,22 +540,37 @@
     }
   }
 
-  function bodyVsWorld(d, e, mu) {
+  function bodyVsWalls(d, e, mu) {
     if (d.x - d.r < L) { d.x = L + d.r; P.resolve(d, d.r, 1, 0, 0, 0, e, mu, 0.5); }
     if (d.x + d.r > RX) { d.x = RX - d.r; P.resolve(d, d.r, -1, 0, 0, 0, e, mu, 0.5); }
     if (d.y - d.r < T) { d.y = T + d.r; P.resolve(d, d.r, 0, 1, 0, 0, e, mu, 0.5); }
-    const p = G.paddle;
-    const h = P.circleVsCapsule(d.x, d.y, d.r, p.x, p.y, p.hw, p.r);
-    if (h) { d.x += h.nx * h.pen; d.y += h.ny * h.pen; P.resolve(d, d.r, h.nx, h.ny, p.vx, 0, e, mu, 0.5); }
+  }
+
+  // Пойманный осколок: очки с множителем серии и всплывающая надпись над ракеткой. Поимки, идущие кучно,
+  // складываются в одну надпись, и она растёт, пока поток осколков не кончится.
+  function catchShard(d) {
+    const p = G.paddle, st = G.streak;
+    d.caught = true;
+    st.n = G.time - st.t < STREAK_GAP ? st.n + 1 : 1;
+    st.t = G.time;
+    const pts = Math.round(d.pts * Math.min(1 + 0.1 * (st.n - 1), STREAK_MAX));
+    G.score += pts;
+    const last = G.popups[G.popups.length - 1];
+    if (last && last.t < 0.35) { last.v += pts; last.t = 0; last.x += (d.x - last.x) * 0.3; last.n = st.n; last.color = d.color; }
+    else G.popups.push({ x: d.x, v: pts, t: 0, age: 0, n: st.n, color: d.color }); // t — с последней поимки
+    p.flash = Math.max(p.flash, 0.4);
+    sparks(d.x, p.y - p.r, 5, d.color, 200, 0, -1, 1.1);
+    sfx('shard', st.n, pan(d.x));
   }
 
   function updateDebris(dt) {
+    const p = G.paddle, dr = Math.exp(-SHARD_DRAG * dt);
     for (const d of G.debris) {
-      d.vy += GRAV * dt;
+      d.vy += SHARD_G * dt;
+      d.vx *= dr; d.vy *= dr;
       d.x += d.vx * dt; d.y += d.vy * dt;
       d.a += d.w * dt;
-      d.life -= dt;
-      bodyVsWorld(d, 0.35, 0.5);
+      bodyVsWalls(d, 0.35, 0.5);
       if (d.y < ZONE_B + 60) {
         for (const k of G.bricks) {
           if (!k.alive) continue;
@@ -561,8 +583,13 @@
           P.resolve(d, d.r, h.nx, h.ny, cvx, cvy, 0.3, 0.6, 0.5);
         }
       }
+      if (P.circleVsCapsule(d.x, d.y, d.r + 3, p.x, p.y, p.hw, p.r)) { catchShard(d); continue; }
+      // В полёте осколок живёт, пока его не поймают или он не упадёт за край; улёгшийся на кирпич — гаснет
+      d.age += dt;
+      d.rest = Math.hypot(d.vx, d.vy) < 40 ? d.rest + dt : 0;
+      if (d.rest > 0.5 || d.age > 12) d.life -= dt;
     }
-    G.debris = G.debris.filter(d => d.life > 0 && d.y < H + 60);
+    G.debris = G.debris.filter(d => !d.caught && d.life > 0 && d.y < H + 60);
   }
 
   function updateParticles(dt) {
@@ -577,6 +604,8 @@
     if (G.particles.length > 1400) G.particles.splice(0, G.particles.length - 1400);
     for (const w of G.waves) w.t += dt;
     G.waves = G.waves.filter(w => w.t < w.max);
+    for (const q of G.popups) { q.t += dt; q.age += dt; }
+    G.popups = G.popups.filter(q => q.t < 1.1);
   }
 
   function updatePowerups(dt) {

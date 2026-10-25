@@ -178,6 +178,12 @@
     [0, 2, 4, 7].forEach((s, i) =>
       tone({ t: t + i * 0.06, f: A.note(5 + s), d: 0.22, vol: 0.16, pan, type: 'square', lp: 3000 }));
   };
+  // Пойманный осколок: короткий колокольчик; серия поимок поднимается по тонам текущего аккорда
+  A.shard = (n, pan) => {
+    if (!A.ready || !gate('shard', 0.035)) return;
+    bell(A.note(4 + Math.min(n - 1, 9)), 0.11, pan, 0.3, 4.0, 0.9);
+    noise({ f: 7000, q: 1.5, d: 0.02, vol: 0.05, pan, ft: 'highpass' });
+  };
   A.laser = pan => {
     if (!A.ready || !gate('laser', 0.05)) return;
     tone({ f: 1500, f2: 260, d: 0.13, vol: 0.12, pan, type: 'square', lp: 4000, glide: 0.12 });
