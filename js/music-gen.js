@@ -97,7 +97,7 @@
 
   // Голосоведение: обращение аккорда, ближайшее к предыдущему звучанию
   MG.voice = (midis, prev, lo, hi) => {
-    const pcs = midis.map(m => ((m % 12) + 12) % 12);
+    const pcs = [...new Set(midis.map(m => ((m % 12) + 12) % 12))];
     let best = null, bestCost = Infinity;
     for (let inv = 0; inv < pcs.length; inv++) {
       let base = lo;
@@ -108,13 +108,18 @@
         while (((m % 12) + 12) % 12 !== pcs[(inv + i) % pcs.length]) m++;
         v.push(m);
       }
-      if (v[v.length - 1] > hi) continue;
-      const cost = prev
-        ? v.reduce((s, m, i) => s + Math.abs(m - prev[Math.min(i, prev.length - 1)]), 0)
-        : Math.abs(v[0] - (lo + 4));
-      if (cost < bestCost) { bestCost = cost; best = v; }
+      // Search every octave of every inversion. The old search only considered the lowest voicing.
+      for (let shift = 0; v[v.length - 1] + shift <= hi; shift += 12) {
+        const notes = v.map(m => m + shift);
+        const motion = prev ? notes.reduce((s, m, i) => s + Math.abs(m - prev[Math.min(i, prev.length - 1)]), 0) : 0;
+        const shared = prev ? notes.filter(m => prev.includes(m)).length : 0;
+        const center = notes.reduce((a, b) => a + b, 0) / notes.length;
+        const lowCluster = notes[0] < 59 && notes[1] - notes[0] <= 2 ? 8 : 0;
+        const cost = motion - shared * 1.5 + Math.abs(center - (lo + hi) / 2) * 0.4 + lowCluster;
+        if (cost < bestCost) { bestCost = cost; best = notes; }
+      }
     }
-    return best || midis;
+    return best || midis.map(m => { while (m < lo) m += 12; while (m > hi) m -= 12; return m; }).sort((a, b) => a - b);
   };
 
   // ---------- Бас ----------
@@ -194,6 +199,20 @@
       if (r.chance(0.3)) e.acc = 1 - e.acc;
       if (r.chance(0.2)) e.slide = 1 - e.slide;
     }
+  };
+
+  // Keep the song's bass rhythm, but lock accents to the kick and answer at the end of a phrase.
+  MG.bassBar = (pattern, drums, bar, energy) => {
+    const notes = pattern.filter((e, i) => energy >= 0.35 || e.s % 4 === 0 || i % 2 === 0).map(e => ({ ...e }));
+    for (let i = 0; i < notes.length; i++) {
+      const e = notes[i];
+      if (drums.kick[e.s] >= 0.7) e.acc = 1;
+      if (bar % 4 === 2 && energy > 0.6 && e.s % 4 === 2 && e.n === 'r') e.n = 'o';
+      if (bar % 4 === 3 && i === notes.length - 1 && e.s >= 12 && energy > 0.4) e.n = 'a';
+      const space = (notes[i + 1]?.s ?? 16) - e.s;
+      e.len = Math.min(e.len, space);
+    }
+    return notes;
   };
 
   // ---------- Барабаны ----------
@@ -329,7 +348,7 @@
     switch (a.mode) {
       case 'down': return ext[n - 1 - (i % n)];
       case 'updown': { const p = Math.max(1, 2 * n - 2), k = i % p; return ext[k < n ? k : p - k]; }
-      case 'random': return ext[Math.floor(Math.random() * n)];
+      case 'random': return ext[Math.floor(AK.U.hash(i, n, a.pat[0]) * n)];
       case 'pattern': return ext[a.pat[i % a.pat.length] % n];
       case 'broken': return ext[([0, 2, 1, 3][i % 4] + Math.floor(i / 4)) % n];
       default: return ext[i % n];
@@ -348,14 +367,19 @@
   // Мотив: ритм на такт + контур (шаги по ступеням между соседними нотами). Ритм чаще берётся из готовых,
   // контур — дуга, впадина, подъём, спуск или волна; ходы в основном поступенные, а после скачка мелодия
   // делает шаг назад, заполняя его.
-  MG.motif = (r, density) => {
+  MG.motif = (r, density, style) => {
     const tier = density < 0.35 ? r.weighted([[0, 2], [1, 1]])
       : density < 0.8 ? r.weighted([[0, 0.6], [1, 3], [2, 0.6]]) : r.weighted([[1, 2], [2, 1.5]]);
-    const steps = r.chance(0.8) ? r.pick(RHY[tier]) : freeRhythm(r, density);
+    let steps = r.chance(0.8) ? r.pick(RHY[tier]) : freeRhythm(r, density);
+    // A repeated rhythmic cell gives the hook a recognisable identity, including a breath at the end.
+    if (r.chance(0.65)) {
+      const cell = r.pick(style === 'techno' ? [[0, 3, 6], [0, 2, 6]] : [[0, 3], [0, 2, 4], [0, 4], [2, 4, 6]]);
+      steps = cell.concat(cell.map(s => s + 8)).filter(s => s < 14);
+    }
     const shape = r.weighted([['arch', 3], ['valley', 1.5], ['rise', 1.5], ['fall', 2], ['wave', 2]]);
     const n = steps.length;
     let prev = 0;
-    return steps.map((s, i) => {
+    const motif = steps.map((s, i) => {
       const nx = i + 1 < n ? steps[i + 1] : 16;
       const len = Math.max(1, (nx - s) * (i === n - 1 ? r.range(0.6, 1) : r.chance(0.2) ? 0.5 : r.range(0.75, 1)));
       let d = 0;
@@ -369,6 +393,13 @@
       prev = d;
       return { s, len, d };
     });
+    let pitch = r.pick([2, 4, 4, 7]);
+    for (const n of motif) {
+      if (pitch + n.d < 0 || pitch + n.d > 10) n.d = -n.d;
+      pitch = Math.max(0, Math.min(10, pitch + n.d));
+      n.p = pitch;
+    }
+    return motif;
   };
   // Свободный ритм: ноты чаще на долях
   function freeRhythm(r, density) {
@@ -406,6 +437,7 @@
     for (let i = 0; i < v.length; i++) {
       const nx = i + 1 < v.length ? v[i + 1].s : 16;
       v[i].len = Math.min(v[i].len, Math.max(0.5, nx - v[i].s));
+      v[i].p = i ? Math.max(0, Math.min(10, v[i - 1].p + v[i].d)) : (m[0].p ?? 4);
     }
     return v;
   };
@@ -427,10 +459,10 @@
   // последний — ответом на основном тоне. chords — по аккорду на такт или на каждые полтакта (8 штук).
   MG.phrase = (r, chords, motif, opts) => {
     const lo = opts.lo, hi = opts.hi;
-    const B = r.chance(0.5) ? MG.motif(r, opts.density) : MG.varyMotif(r, motif, r.pick(['invert', 'retro']));
-    const plan = r.pick([['A', 'A1', 'B', 'A2'], ['A', 'B', 'A1', 'B2'], ['A', 'A', 'B', 'A2'], ['A', 'A1', 'A', 'B2'], ['A', 'B', 'A', 'B2']]);
+    const B = MG.varyMotif(r, motif, 'tail');
+    const plan = ['A', 'B', 'A', 'B2'];
     const chAt = (bi, st) => (chords.length >= 8 ? chords[bi * 2 + (st >= 8 ? 1 : 0)] : chords[bi % chords.length]);
-    let last = opts.start != null ? into(opts.start, lo, hi) : Math.round((lo + hi) / 2);
+    let last = motif[0].p ?? Math.round((lo + hi) / 2);
     let top = -Infinity;
     const bars = plan.map((p, bi) => {
       let m = p[0] === 'A' ? motif : B;
@@ -440,20 +472,27 @@
       const out = [];
       m.forEach((n, i) => {
         const ch = chAt(bi, n.s);
-        if (i === 0) deg = snap(ch, last, 0);
-        else {
-          const d = deg + n.d > hi || deg + n.d < lo ? -n.d : n.d;
-          deg += d;
-          if (n.s % 4 === 0 || n.len >= 3) deg = snap(ch, deg, d);
+        // Reharmonise a fixed pitched hook instead of restarting a random walk at the last note.
+        const target = n.p ?? (i ? deg + n.d : 4);
+        deg = target;
+        if (i === 0 || n.s % 4 === 0 || n.len >= 3) {
+          const candidates = [];
+          for (let d = lo; d <= hi; d++) if (MG.isChordDeg(ch, d)) candidates.push(d);
+          candidates.sort((a, b) => (Math.abs(a - target) * 3 + Math.abs(a - last) * 0.35)
+            - (Math.abs(b - target) * 3 + Math.abs(b - last) * 0.35));
+          deg = candidates[0] ?? target;
         }
         deg = into(deg, lo, hi);
         top = Math.max(top, deg);
-        out.push({ s: n.s, len: n.len, deg, vel: n.s % 4 === 0 ? 1 : 0.8 });
+        // Do not sustain a non-chord tone through a harmonic change at the half-bar.
+        const span = n.s < 8 && chAt(bi, 0) !== chAt(bi, 8) ? 8 - n.s : 16 - n.s;
+        out.push({ s: n.s, len: Math.min(n.len, span), deg, vel: (n.s % 4 === 0 ? 0.96 : 0.76) * (bi === 1 ? 0.92 : 1) });
+        last = deg;
       });
       const L = out[out.length - 1];
       if (L && bi === 3) {
         L.deg = into(MG.nearestRootDeg(chAt(bi, L.s), L.deg), lo, hi);
-        L.len = Math.max(L.len, 16 - L.s);
+        L.len = Math.max(0.5, 15 - L.s); // a short breath before the hook comes back
       } else if (L && bi === 1 && L.s >= 6) {
         const ch = chAt(bi, L.s);
         let d = snap(ch, L.deg, 0);
@@ -467,6 +506,24 @@
     // вершина фразы чуть громче
     for (const b of bars) for (const n of b) if (n.deg === top) n.vel = Math.min(1.1, n.vel + 0.1);
     return bars;
+  };
+
+  // The musical director changes density at bar boundaries; notes still use the one audio clock.
+  MG.arrangement = (type, bar, energy) => {
+    const quiet = type === 'intro' || type === 'break', lift = bar % 4 === 2, answer = bar % 4 === 1;
+    return {
+      drums: (quiet ? 0.65 : 0.86) + energy * 0.14,
+      bass: 0.72 + energy * 0.28,
+      pad: (quiet ? 1 : 0.65) * (1 - energy * 0.22),
+      lead: (quiet ? 0.68 : 0.85) + energy * 0.15,
+      arp: (answer ? 0.85 : 0.62) + energy * 0.25,
+      stab: 0.6 + energy * 0.3,
+      arpStride: energy < 0.35 ? 4 : energy < 0.7 ? 2 : 1,
+      percussion: energy > 0.35,
+      lift: lift && energy > 0.6,
+      energy,
+      phrase: ['Тема', 'Ответ', 'Развитие', 'Разрешение'][bar % 4],
+    };
   };
 
   AK.MGen = MG;

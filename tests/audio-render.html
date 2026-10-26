@@ -1,0 +1,57 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Offline music render checks</title>
+<script src="../js/util.js"></script>
+<script src="../js/music-kit.js"></script>
+<script src="../js/music-synth.js"></script>
+<script src="../js/music-gen.js"></script>
+<script src="../js/music.js"></script>
+<script>
+// Only this test page replaces timers: OfflineAudioContext schedules the complete score synchronously.
+window.setInterval = () => 0;
+AK.A = { playing: true, musicOn: true };
+window.renderMusic = async function (style, seed, mute = false) {
+  const rate = 32000, duration = 26;
+  const ctx = new OfflineAudioContext(2, rate * duration, rate);
+  const noise = ctx.createBuffer(1, rate * 2, rate), rng = AK.U.rng(seed);
+  const nd = noise.getChannelData(0);
+  for (let i = 0; i < nd.length; i++) nd[i] = rng() * 2 - 1;
+  const M = AK.Music, S = AK.MSynth;
+  M.init(ctx, ctx.destination, null, noise);
+  for (const key of ['bpm', 'key', 'mode', 'swing']) M.set(key, null);
+  M.set('style', style); M.set('modulate', 0.35); M.set('evolve', 1); M.setIntensity(0.72); M.newSong(seed);
+  M.queue('groove'); M.prerender(6);
+  M.queue('build'); M.prerender(12);
+  M.queue('drop'); M.prerender(20);
+  if (mute) S.mix('master', 0);
+  const allocated = S.stats();
+  const buffer = await ctx.startRendering();
+  let peak = 0, sum = 0, dc = 0, side = 0, nonfinite = 0, tail = 0;
+  const left = buffer.getChannelData(0), right = buffer.getChannelData(1);
+  for (let i = 0; i < left.length; i++) {
+    if (!Number.isFinite(left[i]) || !Number.isFinite(right[i])) nonfinite++;
+    peak = Math.max(peak, Math.abs(left[i]), Math.abs(right[i]));
+    sum += (left[i] * left[i] + right[i] * right[i]) / 2;
+    dc += (left[i] + right[i]) / 2; side += (left[i] - right[i]) ** 2;
+    if (i > left.length - rate) tail += left[i] * left[i];
+  }
+  const result = { style, peak, rms: Math.sqrt(sum / left.length), dc: dc / left.length,
+    stereo: Math.sqrt(side / left.length), tailRms: Math.sqrt(tail / rate), nonfinite, allocated, remaining: S.stats() };
+  if (style === 'synthwave' && !mute) {
+    const bytes = new ArrayBuffer(44 + left.length * 4), d = new DataView(bytes);
+    const word = (offset, value) => { for (let i = 0; i < value.length; i++) d.setUint8(offset + i, value.charCodeAt(i)); };
+    word(0, 'RIFF'); d.setUint32(4, bytes.byteLength - 8, true); word(8, 'WAVE'); word(12, 'fmt ');
+    d.setUint32(16, 16, true); d.setUint16(20, 1, true); d.setUint16(22, 2, true); d.setUint32(24, rate, true);
+    d.setUint32(28, rate * 4, true); d.setUint16(32, 4, true); d.setUint16(34, 16, true);
+    word(36, 'data'); d.setUint32(40, bytes.byteLength - 44, true);
+    for (let i = 0; i < left.length; i++) {
+      d.setInt16(44 + i * 4, Math.max(-1, Math.min(1, left[i])) * 32767, true);
+      d.setInt16(46 + i * 4, Math.max(-1, Math.min(1, right[i])) * 32767, true);
+    }
+    const arr = new Uint8Array(bytes); let binary = '';
+    for (let i = 0; i < arr.length; i += 8192) binary += String.fromCharCode(...arr.subarray(i, i + 8192));
+    result.wav = btoa(binary);
+  }
+  return result;
+};
+</script>
