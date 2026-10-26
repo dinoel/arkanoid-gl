@@ -47,16 +47,20 @@
     return b;
   }
 
+  // Выход звука: усиление (возвращается) и панорама (в g.p)
   function out(pan, bus) {
     const g = ctx.createGain();
     g.gain.value = 0;
     if (ctx.createStereoPanner) {
-      const p = ctx.createStereoPanner();
+      const p = g.p = ctx.createStereoPanner();
       p.pan.value = clamp(pan || 0, -1, 1);
       g.connect(p); p.connect(bus || sfx);
     } else g.connect(bus || sfx);
     return g;
   }
+  // Когда источник src отзвучит, отключить узлы звука от графа. Сами они висели бы в нём до сборки мусора,
+  // и звуковой поток обсчитывал бы их тишину (так же в music-synth.js).
+  function free(src, nodes) { src.onended = () => { for (const n of nodes) if (n) n.disconnect(); }; }
   function env(param, t, a, peak, d) {
     peak = Math.max(peak, 0.0002);
     param.setValueAtTime(0.0001, t);
@@ -91,6 +95,7 @@
     node.connect(g);
     env(g.gain, t, a, o.vol, d);
     osc.start(t); osc.stop(t + a + d + 0.05);
+    free(osc, [osc, node, g, g.p]);
   }
 
   function noise(o) {
@@ -107,6 +112,7 @@
     src.connect(f); f.connect(g);
     env(g.gain, t, a, o.vol, d);
     src.start(t, Math.random() * 1.5); src.stop(t + a + d + 0.05);
+    free(src, [src, f, g, g.p]);
   }
 
   // FM-колокольчик
@@ -121,6 +127,7 @@
     car.connect(g);
     env(g.gain, t, 0.002, vol, dur);
     car.start(t); mod.start(t); car.stop(t + dur + 0.1); mod.stop(t + dur + 0.1);
+    free(car, [car, mod, mg, g, g.p]);
   }
 
   // Металл: набор негармонических обертонов

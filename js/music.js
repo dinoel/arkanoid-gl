@@ -77,11 +77,11 @@
   // ---------- Секции ----------
   const SEC = {
     intro: { e: 0.2, len: [4, 8], drums: ['none', 'sparse', 'pulse'], bass: 0.35, bassStyle: 'long', arp: 0.7, pad: 0.9, lead: 0, stab: 0.1, lp: 1400 },
-    groove: { e: 0.55, len: [8, 16], drums: 'main', bass: 1, arp: 0.6, pad: 0.5, lead: 0.4, stab: 0.35 },
+    groove: { e: 0.55, len: [8, 16], drums: 'main', bass: 1, arp: 0.6, pad: 0.5, lead: 0.6, stab: 0.35 },
     build: { e: 0.75, len: [4, 8], drums: 'main', bass: 0.7, arp: 1, pad: 0.6, lead: 0, stab: 0.2 },
-    drop: { e: 1, len: [8, 16], drums: 'main', bass: 1, arp: 0.5, pad: 0.45, lead: 0.85, stab: 0.5 },
-    break: { e: 0.3, len: [8], drums: ['none', 'sparse'], bass: 0.5, bassStyle: 'long', arp: 0.5, pad: 1, lead: 0.7, stab: 0.2, lp: 2600 },
-    bridge: { e: 0.6, len: [8], drums: 'alt', bass: 1, arp: 0.7, pad: 0.7, lead: 0.5, stab: 0.3, modulate: true },
+    drop: { e: 1, len: [8, 16], drums: 'main', bass: 1, arp: 0.5, pad: 0.45, lead: 1, stab: 0.5 },
+    break: { e: 0.3, len: [8], drums: ['none', 'sparse'], bass: 0.5, bassStyle: 'long', arp: 0.5, pad: 1, lead: 0.8, stab: 0.2, lp: 2600 },
+    bridge: { e: 0.6, len: [8], drums: 'alt', bass: 1, arp: 0.7, pad: 0.7, lead: 0.7, stab: 0.3, modulate: true },
   };
   const NEXT = {
     intro: [['groove', 3], ['build', 1.5]],
@@ -181,7 +181,7 @@
     };
     const bassStyle = r.weighted(pal.bass);
     song.theme = {
-      prog: MG.progression(r, r.pick([4, 4, 8]), pal.ext), motif: MG.motif(r, 0.5),
+      prog: MG.progression(r, r.pick([4, 4, 8]), pal.ext, song.mode), motif: MG.motif(r, 0.6), phrases: {},
       drums: MG.drumPattern(r, r.weighted(pal.drums)), bassStyle, bass: MG.bassPattern(r, bassStyle), arp: MG.arp(r),
     };
     song.count = 0; song.sec = null; song.voicing = null; song.pending = null;
@@ -195,7 +195,7 @@
   function modTarget() {
     let key = song.key, mode = song.mode;
     const minor = !!MG.MINOR[mode];
-    switch (r.weighted([['up5', 2], ['up7', 1.5], ['down2', 1], ['rel', 1.5], ['up1', 0.5], ['up3', 1], ['mode', 1.2]])) {
+    switch (r.weighted([['up5', 2], ['up7', 1.5], ['down2', 0.8], ['rel', 2], ['up1', 0.3], ['up3', 0.6], ['mode', 0.6]])) {
       case 'up5': key += 5; break;
       case 'up7': key += 7; break;
       case 'down2': key -= 2; break;
@@ -239,8 +239,8 @@
     const def = SEC[type], pal = song.pal, th = song.theme, kit = song.kit;
     const s = { type, def, len: r.pick(def.len), key: song.key, mode: song.mode, prev: null, next: null, tr: null };
     if (prev) {
-      if (cfg.modulate > 0 && (def.modulate || (type !== 'drop' && r.chance(0.22 * cfg.modulate)))) Object.assign(s, modTarget());
-      if (!cfg.lockStyle && r.chance(0.14)) {
+      if (cfg.modulate > 0 && (def.modulate || (type !== 'drop' && r.chance(0.15 * cfg.modulate)))) Object.assign(s, modTarget());
+      if (!cfg.lockStyle && r.chance(0.07)) {
         const others = Object.keys(PAL).filter(n => n !== song.palName && n !== 'chip');
         song.tpalName = r.chance(0.6) ? r.pick(others) : null; // дрейф тембров
         song.tpal = song.tpalName ? PAL[song.tpalName] : null;
@@ -248,10 +248,11 @@
       if (type !== 'drop' && r.chance(song.tpal ? 0.5 : 0.3)) swapKit();
     }
     if (cfg.lockStyle) { song.tpal = null; song.tpalName = null; }
-    // гармония: в дропе звучит тема песни, иногда секция продолжает гармонию предыдущей
-    if (type === 'drop' || (type === 'groove' && r.chance(0.5))) s.prog = th.prog;
-    else if (prev && type !== 'bridge' && r.chance(0.25)) s.prog = prev.prog;
-    else s.prog = MG.progression(r, r.pick([2, 4, 4, 8]), pal.ext);
+    // гармония: в дропе звучит тема песни, иногда секция продолжает гармонию предыдущей. Взятая
+    // гармония подгоняется под лад секции: после модуляции в ней могли оказаться уменьшённые аккорды.
+    if (type === 'drop' || (type === 'groove' && r.chance(0.5))) s.prog = MG.fitProg(th.prog, s.mode);
+    else if (prev && type !== 'bridge' && r.chance(0.25)) s.prog = MG.fitProg(prev.prog, s.mode);
+    else s.prog = MG.progression(r, r.pick([2, 4, 4, 8]), pal.ext, s.mode);
     if (type === 'bridge' && r.chance(0.3)) th.prog = s.prog; // тема тоже эволюционирует
     s.chordBars = type === 'break' || type === 'intro' ? r.pick([1, 2]) : r.weighted([[1, 5], [2, 1.5], [0.5, 0.7]]);
     // ритм: бит песни переходит из секции в секцию с вариациями, дроп узнаётся по своему биту
@@ -283,12 +284,18 @@
     s.arpTone = kit.arp;
     s.usePad = r.chance(def.pad); s.padTone = kit.pad;
     s.useStab = r.chance(def.stab); s.stabTone = kit.stab; s.stabR = kit.stabR;
-    s.useLead = r.chance(def.lead * (pal.leadP + 0.3)); s.leadTone = kit.lead;
-    // мотив вырастает из предыдущей секции или из темы
-    const base = prev && prev.motif && r.chance(0.5) ? prev.motif : th.motif;
-    s.motif = r.chance(0.7) ? MG.varyMotif(r, base, r.pick(['tail', 'rhythm', 'ornament', 'invert'])) : MG.motif(r, def.e);
-    if (r.chance(0.15)) th.motif = s.motif;
-    s.phrases = {};
+    s.useLead = r.chance(Math.min(1, def.lead * (pal.leadP + 0.5))); s.leadTone = kit.lead;
+    // под мелодией середина не забивается: арпеджио или стабы, редко всё сразу
+    if (s.useLead && s.useArp && s.useStab && r.chance(0.6)) { if (r.chance(0.5)) s.useArp = false; else s.useStab = false; }
+    // Мелодия. В дропе звучит тема песни — тот же мотив и те же фразы (они общие на всю песню), поэтому
+    // дроп узнаётся. В других секциях мотив вырастает из темы или из предыдущей секции, изредка новый.
+    if (type === 'drop') { s.motif = th.motif; s.phrases = th.phrases; }
+    else {
+      const base = prev && prev.motif && r.chance(0.4) ? prev.motif : th.motif;
+      s.motif = r.chance(0.75) ? MG.varyMotif(r, base, r.pick(['tail', 'rhythm', 'ornament', 'invert'])) : MG.motif(r, def.e);
+      s.phrases = {};
+      if (r.chance(0.08)) { th.motif = s.motif; th.phrases = {}; }
+    }
     if (!s.usePad && !s.useArp && !s.useLead && !s.useStab) s.usePad = true;
     s.fillP = r.range(0.4, 0.85);
     s.sw = handoff(prev, s);
@@ -417,16 +424,17 @@
     if (p(0.4)) MG.mutateBass(r, s.bass);
     if (p(0.12)) s.bass = MG.bassPattern(r, s.bassStyle);
     if (p(0.25)) s.arp.mode = r.pick(['up', 'down', 'updown', 'pattern', 'broken']);
-    if (p(0.2)) s.arp.oct = r.int(1, 3);
-    if (p(0.2)) s.arp.pat = s.arp.pat.map(x => (r.chance(0.3) ? r.int(0, 6) : x));
+    if (p(0.2)) s.arp.oct = r.int(1, 2);
+    if (p(0.2)) s.arp.pat = MG.arpPat(r);
     if (p(0.18)) s.useStab = !s.useStab && s.def.stab > 0;
     if (p(0.15) && s.type !== 'build') s.useArp = !s.useArp;
     if (!s.useLead && s.def.lead > 0 && p(0.3 * (0.5 + inten))) s.useLead = true;
-    if (p(0.12)) s.phrases = {}; // новая мелодия на старой гармонии
+    if (s.type !== 'drop' && p(0.12)) s.phrases = {}; // новая мелодия на старой гармонии (в дропе — тема)
   }
 
   function getPhrase(s, bar) {
-    const chords = [0, 1, 2, 3].map(b => chordAt(s, bar + b, 0));
+    const chords = []; // по аккорду на каждые полтакта: аккорды могут меняться посреди такта
+    for (let h = 0; h < 8; h++) chords.push(chordAt(s, bar + (h >> 1), (h & 1) * 8));
     const key = ((bar / 4) % 2) + ':' + chords.map(c => c.deg + c.ext).join(',');
     if (!s.phrases[key]) {
       s.phrases[key] = MG.phrase(r, chords, s.motif, { lo: 0, hi: 10, density: s.def.e, start: song.lastLeadDeg });
@@ -600,6 +608,7 @@
       }
     }
 
+    const leadOn = s.useLead && bar >= s.sw.lead; // мелодия звучит — остальные голоса уступают ей место
     // пэд и стабы
     const sp = L('pad'), ss = L('stab');
     const padIn = !chStart && st === 0 && bar > 0 && bar === s.sw.pad && s.usePad; // пэд новой секции вступает посреди аккорда
@@ -607,15 +616,15 @@
       S.pad(t, song.voicing, chordSpan(s, bar, st) * sd * 0.98, 0.8 + 0.4 * (1 - inten), sp.padTone);
     }
     if (ss.useStab && ss.stabR.includes(st) && !silent && !mute.stab) {
-      S.stab(t, song.voicing.map(m => m + (ss.stabTone === 'epiano' ? 0 : 12)), sd * 1.6, 0.9, ss.stabTone, (Math.random() - 0.5) * 0.4);
+      S.stab(t, song.voicing.map(m => m + (ss.stabTone === 'epiano' ? 0 : 12)), sd * 1.6, leadOn ? 0.7 : 0.9, ss.stabTone, (Math.random() - 0.5) * 0.4);
     }
 
-    // арпеджио
+    // арпеджио; под мелодией — на октаву ниже и в одну октаву, чтобы не спорить с ней
     const sa = L('arp');
     if (sa.useArp && !silent && !mute.arp) {
-      const a = sa.arp;
-      const tones = song.voicing.map(m => m + 12);
-      const vel = s.useLead ? 0.55 : 0.85;
+      const a = leadOn ? Object.assign({}, sa.arp, { oct: 1 }) : sa.arp;
+      const tones = song.voicing.map(m => m + (leadOn ? 0 : 12));
+      const vel = leadOn ? 0.5 : 0.85;
       if (a.rate === 3) {
         if (st % 4 === 0) for (let i = 0; i < 3; i++) {
           S.pluck(t + (i * 4 * sd) / 3, MG.arpNote(a, tones, song.arpI++), ((4 * sd) / 3) * a.gate, vel, sa.arpTone, (i - 1) * a.pan);
@@ -662,9 +671,11 @@
     const now = ctx.currentTime;
     inten += (intensity - inten) * 0.04;
     if (!A.playing || !A.musicOn || !song.sec) { song.nextT = now + 0.05; return; }
-    if (song.nextT < now - 0.2) song.nextT = now + 0.05;
+    // Главный поток был занят дольше запаса. Опоздавшие шаги не играем задним числом: ноты с прошедшим
+    // временем звучат все разом, а их огибающие ломаются в щелчки. Сетка просто сдвигается.
+    if (song.nextT < now + 0.01) song.nextT = now + 0.03;
     // в фоновой вкладке таймеры редкие — расписываем дальше вперёд
-    const ahead = typeof document !== 'undefined' && document.hidden ? 1.2 : 0.18;
+    const ahead = typeof document !== 'undefined' && document.hidden ? 1.2 : 0.2;
     while (song.nextT < now + ahead) { playStep(song.nextT); advance(); }
   }
 
@@ -682,8 +693,8 @@
 
   // Нота для звука кирпича: тон текущего аккорда, чем больше индекс — тем выше
   M.brickNote = idx => {
-    const s = song.sec;
-    const ch = s ? chordNow(s, song.bar, song.step) : { deg: 0, ext: 'seven' };
+    const h = heardNow(), s = h.s;
+    const ch = s ? chordNow(s, h.bar, h.st) : { deg: 0, ext: 'seven' };
     const base = fold(song.key + 24, 52, 63);
     const tones = ch.abs
       ? [0, 1, 2, 3, 4].map(i => { const iv = Q[ch.q]; return fold(ch.root + iv[i % iv.length], base, base + 11); })
@@ -738,7 +749,7 @@
     if (!s) return;
     const T = tp(), kit = song.kit, th = song.theme;
     switch (part) {
-      case 'chords': s.prog = MG.progression(r, r.pick([2, 4, 4, 8]), song.pal.ext); s.phrases = {}; s.cur = null; break;
+      case 'chords': s.prog = MG.progression(r, r.pick([2, 4, 4, 8]), song.pal.ext, song.mode); s.phrases = {}; s.cur = null; break;
       case 'drums':
         s.drums = MG.drumPattern(r, r.weighted(song.pal.drums)); th.drums = clone(s.drums);
         s.snare = kit.snare = r.weighted(song.pal.snare);
@@ -756,16 +767,20 @@
         s.usePad = true; s.sw.pad = s.sw.stab = 0;
         break;
       case 'melody':
-        s.motif = th.motif = MG.motif(r, s.def.e); s.phrases = {}; s.cur = null;
+        s.motif = th.motif = MG.motif(r, s.def.e); s.phrases = th.phrases = {}; s.cur = null;
         s.leadTone = kit.lead = r.weighted(T.lead); s.useLead = true; s.sw.lead = 0;
         break;
     }
   };
 
-  M.state = () => {
+  // Шаг, который звучит сейчас (музыка расписана вперёд)
+  function heardNow() {
     if (ctx) while (heard.length && heard[0].t <= ctx.currentTime) lastHeard = heard.shift();
-    const h = lastHeard || { s: song.sec, bar: song.bar, st: song.step };
-    const s = h.s;
+    return lastHeard || { s: song.sec, bar: song.bar, st: song.step };
+  }
+
+  M.state = () => {
+    const h = heardNow(), s = h.s;
     if (!s) return null;
     const L = k => (s.prev && h.bar < s.sw[k] ? s.prev : s);
     const lb = L('bass'), la = L('arp'), lp = L('pad'), ls = L('stab');

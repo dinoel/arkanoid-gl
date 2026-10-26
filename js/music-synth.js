@@ -10,8 +10,26 @@
   const mtof = m => 440 * Math.pow(2, (m - 69) / 12);
   S.mtof = mtof;
 
-  function gain(v, to) { const g = ctx.createGain(); g.gain.value = v; if (to) g.connect(to); return g; }
-  function filt(type, f, q) { const b = ctx.createBiquadFilter(); b.type = type; b.frequency.value = f; b.Q.value = q || 0.7; return b; }
+  // Отыгравшую ноту отключаем от графа сами. Иначе её узлы остаются подключёнными к шинам, пока до них
+  // не доберётся сборщик мусора, и звуковой поток всё это время обсчитывает их тишину: нагрузка растёт минута
+  // за минутой, пока звук не начнёт рваться. Узлы ноты копятся в voice; когда кончается её последний
+  // источник, все они отключаются (см. voiced).
+  let voice = null;
+  const keep = n => { if (voice) voice.push(n); return n; };
+  function voiced(fn) {
+    return (...a) => {
+      const outer = voice, v = (voice = []);
+      try { return fn(...a); } finally {
+        voice = outer;
+        let last = null;
+        for (const n of v) if (n._end != null && (!last || n._end > last._end)) last = n;
+        if (last) last.onended = () => { for (const n of v) n.disconnect(); };
+      }
+    };
+  }
+
+  function gain(v, to) { const g = keep(ctx.createGain()); g.gain.value = v; if (to) g.connect(to); return g; }
+  function filt(type, f, q) { const b = keep(ctx.createBiquadFilter()); b.type = type; b.frequency.value = f; b.Q.value = q || 0.7; return b; }
   function curve(k) {
     const c = new Float32Array(1024), n = Math.tanh(k);
     for (let i = 0; i < 1024; i++) { const x = (i / 1023) * 2 - 1; c[i] = Math.tanh(k * x) / n; }
@@ -24,7 +42,7 @@
   }
 
   S.init = function (c, dest, reverb, noise) {
-    ctx = c; noiseBuf = noise;
+    ctx = c; noiseBuf = noise; ports = new Map();
     S.out = gain(0.27, dest);
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -20; comp.knee.value = 10; comp.ratio.value = 4; comp.attack.value = 0.005; comp.release.value = 0.12;
@@ -42,7 +60,13 @@
     S.delay = ctx.createDelay(2); S.delay.delayTime.value = 0.3;
     const fb = fbGain = gain(fbBase), dl = filt('lowpass', 2400);
     delaySend = gain(1); delaySend.connect(S.delay); S.delay.connect(dl); dl.connect(fb); fb.connect(S.delay);
-    dl.connect(gain(0.5, duck));
+    // повторы эха звучат широко: правый канал на 13 мс позже левого
+    if (ctx.createStereoPanner) {
+      const haas = ctx.createDelay(0.05), pl = ctx.createStereoPanner(), pr = ctx.createStereoPanner();
+      haas.delayTime.value = 0.013; pl.pan.value = -0.7; pr.pan.value = 0.7;
+      dl.connect(pl); pl.connect(gain(0.4, duck));
+      dl.connect(haas); haas.connect(pr); pr.connect(gain(0.4, duck));
+    } else dl.connect(gain(0.5, duck));
     revSend = gain(0.8, reverb);
     pulse25 = makePulse(0.25); pulse12 = makePulse(0.125);
     mixParams = {
@@ -62,13 +86,29 @@
   S.setTempo = bpm => S.delay.delayTime.setValueAtTime((60 / bpm) * 0.75, ctx.currentTime);
 
   // ---------- Базовые блоки ----------
+  // Порт: постоянный вход шины dest с посылами в эхо (send) и реверберацию (rev), один на каждое их сочетание.
+  // Голоса подключаются к нему, а не заводят свои узлы посылов: звуковой поток обрабатывает каждый живой
+  // узел на каждом такте рендера, даже молчащий, так что лишние узлы у каждой ноты — это заметная нагрузка.
+  let ports = new Map();
+  function port(dest, send, rev) {
+    let byDest = ports.get(dest);
+    if (!byDest) ports.set(dest, (byDest = new Map()));
+    const key = send + '|' + rev;
+    let p = byDest.get(key);
+    if (!p) {
+      p = ctx.createGain(); p.connect(dest);
+      if (send) { const g = ctx.createGain(); g.gain.value = send; p.connect(g); g.connect(delaySend); }
+      if (rev) { const g = ctx.createGain(); g.gain.value = rev; p.connect(g); g.connect(revSend); }
+      byDest.set(key, p);
+    }
+    return p;
+  }
+  // Выход голоса: усиление (возвращается) → панорама → порт
   function vout(dest, pan, send, rev) {
-    const g = ctx.createGain(); g.gain.value = 0;
+    const g = keep(ctx.createGain()); g.gain.value = 0;
     let node = g;
-    if (pan && ctx.createStereoPanner) { const p = ctx.createStereoPanner(); p.pan.value = Math.max(-1, Math.min(1, pan)); g.connect(p); node = p; }
-    node.connect(dest);
-    if (send) node.connect(gain(send, delaySend));
-    if (rev) node.connect(gain(rev, revSend));
+    if (pan && ctx.createStereoPanner) { const p = keep(ctx.createStereoPanner()); p.pan.value = Math.max(-1, Math.min(1, pan)); g.connect(p); node = p; }
+    node.connect(port(dest, send || 0, rev || 0));
     return g;
   }
   function perc(p, t, a, peak, d) {
@@ -84,14 +124,21 @@
     p.setTargetAtTime(0, h, rel / 3);
   }
   function osc(type, f, t, stop, detune) {
-    const o = ctx.createOscillator();
+    const o = keep(ctx.createOscillator());
     if (type === 'pulse') o.setPeriodicWave(pulse25);
     else if (type === 'pulse12') o.setPeriodicWave(pulse12);
     else o.type = type;
     o.frequency.setValueAtTime(f, t);
     if (detune) o.detune.value = detune;
-    o.start(t); o.stop(stop);
+    o.start(t); o.stop(stop); o._end = stop;
     return o;
+  }
+  // Петля шума с t до stop, с места offset
+  function noiseSrc(t, stop, offset) {
+    const src = keep(ctx.createBufferSource());
+    src.buffer = noiseBuf; src.loop = true;
+    src.start(t, offset || 0); src.stop(stop); src._end = stop;
+    return src;
   }
   function glide(o, from, to, t, time) {
     if (!from) return;
@@ -100,9 +147,8 @@
   }
   function nhit(t, o) {
     const a = o.a || 0.001, end = t + a + o.d + 0.05;
-    const src = ctx.createBufferSource();
-    src.buffer = noiseBuf; src.loop = true; src.playbackRate.value = o.rate || 1;
-    src.start(t, Math.random() * 1.5); src.stop(end);
+    const src = noiseSrc(t, end, Math.random() * 1.5);
+    src.playbackRate.value = o.rate || 1;
     const f = filt(o.type || 'bandpass', o.f, o.q);
     if (o.f2) { f.frequency.setValueAtTime(o.f, t); f.frequency.exponentialRampToValueAtTime(o.f2, t + a + o.d); }
     const g = vout(o.dest || busDrums, o.pan, 0, o.rev);
@@ -155,7 +201,7 @@
 
   S.hat = (t, vel, open) => {
     if (openHat && !open) {
-      try { openHat.gain.cancelScheduledValues(t); openHat.gain.setTargetAtTime(0.0001, t, 0.008); } catch (e) { /* уже отыграл */ }
+      try { cancelFrom(openHat.gain, t); openHat.gain.setTargetAtTime(0.0001, t, 0.008); } catch (e) { /* уже отыграл */ }
       openHat = null;
     }
     const g = nhit(t, { type: 'highpass', f: open ? 7000 : 8600, q: 0.9, d: open ? 0.3 : 0.032 + Math.random() * 0.012,
@@ -181,7 +227,7 @@
 
   // ---------- Эффекты ----------
   S.riser = (t, dur, vel) => {
-    const src = ctx.createBufferSource(); src.buffer = noiseBuf; src.loop = true; src.start(t); src.stop(t + dur + 0.1);
+    const src = noiseSrc(t, t + dur + 0.1);
     const f = filt('bandpass', 300, 2.5);
     f.frequency.setValueAtTime(300, t); f.frequency.exponentialRampToValueAtTime(8000, t + dur);
     const g = vout(busSynth, 0, 0.3, 0.5); src.connect(f); f.connect(g);
@@ -200,7 +246,7 @@
   // Обратная тарелка: шум нарастает и обрывается ровно на сильную долю новой секции
   S.swell = (t, dur, vel) => {
     const end = t + dur;
-    const src = ctx.createBufferSource(); src.buffer = noiseBuf; src.loop = true; src.start(t, Math.random()); src.stop(end + 0.05);
+    const src = noiseSrc(t, end + 0.05, Math.random());
     const f = filt('highpass', 1500, 0.7);
     f.frequency.setValueAtTime(1500, t); f.frequency.exponentialRampToValueAtTime(6500, end);
     const g = vout(busSynth, 0, 0, 0.4); src.connect(f); f.connect(g);
@@ -298,7 +344,7 @@
         break;
       }
       case 'fm': {
-        const g = vout(busBass), car = osc('sine', f, t, end), mod = osc('sine', f * 2, t, end), mg = ctx.createGain();
+        const g = vout(busBass), car = osc('sine', f, t, end), mod = osc('sine', f * 2, t, end), mg = keep(ctx.createGain());
         glide(car, from, f, t, gt); glide(mod, from * 2, f * 2, t, gt);
         mg.gain.setValueAtTime(f * (2.5 + acc * 2), t); mg.gain.setTargetAtTime(f * 0.3, t + 0.005, 0.08);
         mod.connect(mg); mg.connect(car.frequency); car.connect(g);
@@ -330,33 +376,41 @@
 
   // ---------- Пэды, стабы ----------
   const PAD_LV = { saw: 0.045, string: 0.032, glass: 0.06, square: 0.03, organ: 0.045 };
+  // Пэд звучит широко: расстроенные голоса одной ноты и соседние звуки аккорда расходятся влево и вправо
   S.pad = (t, midis, dur, vel, kind) => {
     const end = t + dur + 1.4;
-    const g = vout(busSynth, 0, 0.1, 0.6), lp = filt('lowpass', 5000, 0.8);
-    lp.connect(g);
-    if (kind === 'saw' || kind === 'string') {
-      lp.frequency.setValueAtTime(450, t);
-      lp.frequency.linearRampToValueAtTime(kind === 'saw' ? 2400 : 1700, t + dur * 0.5);
-      lp.frequency.linearRampToValueAtTime(650, t + dur + 0.8);
-    }
-    for (const m of midis) {
-      const f = mtof(m);
-      if (kind === 'saw') for (const d of [-9, 9]) osc('sawtooth', f, t, end, d).connect(lp);
-      else if (kind === 'string') for (const d of [-12, 0, 11]) osc('sawtooth', f, t, end, d).connect(lp);
-      else if (kind === 'glass') { osc('sine', f, t, end).connect(lp); osc('triangle', f * 2, t, end, 4).connect(gain(0.3, lp)); }
-      else if (kind === 'square') osc('pulse12', f, t, end).connect(lp);
-      else [1, 2, 4].forEach((h, i) => osc('sine', f * h, t, end).connect(gain([1, 0.5, 0.25][i], lp)));
-    }
+    const g = vout(busSynth, 0, 0.1, 0.6);
+    const side = [-0.6, 0.6].map(pan => {
+      const lp = filt('lowpass', 5000, 0.8);
+      if (ctx.createStereoPanner) { const p = keep(ctx.createStereoPanner()); p.pan.value = pan; lp.connect(p); p.connect(g); }
+      else lp.connect(g);
+      if (kind === 'saw' || kind === 'string') {
+        lp.frequency.setValueAtTime(450, t);
+        lp.frequency.linearRampToValueAtTime(kind === 'saw' ? 2400 : 1700, t + dur * 0.5);
+        lp.frequency.linearRampToValueAtTime(650, t + dur + 0.8);
+      }
+      return lp;
+    });
+    midis.forEach((m, i) => {
+      const f = mtof(m), a = side[i % 2], b = side[(i + 1) % 2];
+      if (kind === 'saw') { osc('sawtooth', f, t, end, -9).connect(side[0]); osc('sawtooth', f, t, end, 9).connect(side[1]); }
+      else if (kind === 'string') {
+        osc('sawtooth', f, t, end, -12).connect(side[0]); osc('sawtooth', f, t, end, 11).connect(side[1]);
+        osc('sawtooth', f, t, end, 0).connect(a);
+      } else if (kind === 'glass') { osc('sine', f, t, end).connect(a); osc('triangle', f * 2, t, end, 4).connect(gain(0.3, b)); }
+      else if (kind === 'square') osc('pulse12', f, t, end).connect(a);
+      else [1, 2, 4].forEach((h, k) => osc('sine', f * h, t, end).connect(gain([1, 0.5, 0.25][k], k === 1 ? b : a)));
+    });
     const lv = (PAD_LV[kind] || 0.045) * vel * (3 / Math.max(3, midis.length));
     hold(g.gain, t, kind === 'square' ? 0.02 : kind === 'glass' ? 0.25 : 0.5, lv, dur, 0.9);
   };
 
   S.stab = (t, midis, dur, vel, kind, pan) => {
-    const end = t + dur + 1;
+    const end = t + (kind === 'epiano' ? Math.max(dur, 0.9) + 0.05 : dur + 0.25); // до конца огибающей
     const g = vout(busSynth, pan || 0, 0.25, 0.35);
     if (kind === 'epiano') {
       for (const m of midis) {
-        const f = mtof(m), car = osc('sine', f, t, end), mod = osc('sine', f, t, end), mg = ctx.createGain();
+        const f = mtof(m), car = osc('sine', f, t, end), mod = osc('sine', f, t, end), mg = keep(ctx.createGain());
         mg.gain.setValueAtTime(f * 1.8, t); mg.gain.setTargetAtTime(f * 0.08, t + 0.003, 0.18);
         mod.connect(mg); mg.connect(car.frequency); car.connect(g);
       }
@@ -378,13 +432,17 @@
 
   // ---------- Плаки (арпеджио) ----------
   S.pluck = (t, midi, dur, vel, kind, pan) => {
-    const f = mtof(midi), end = t + Math.max(dur, 0.1) + 0.9;
-    const g = vout(busSynth, pan, 0.28, 0.25);
+    // нота живёт, пока слышна огибающая: арпеджио играет шестнадцатыми, и лишние полсекунды на каждую ноту
+    // заметно добавляют звуковому потоку работы
+    const life = kind === 'square' ? dur * 0.8 + 0.12 : kind === 'chip' ? dur * 0.85 + 0.05
+      : kind === 'bell' ? 0.71 : kind === 'marimba' ? 0.36 : kind === 'glass' ? 0.61 : 0.31;
+    const f = mtof(midi), end = t + life + 0.02;
+    const g = vout(busSynth, pan, 0.18, 0.25);
     switch (kind) {
       case 'square': { const lp = filt('lowpass', 4000, 1); osc('square', f, t, end).connect(lp); lp.connect(g); hold(g.gain, t, 0.002, 0.05 * vel, dur * 0.8, 0.03); break; }
       case 'chip': { osc('pulse', f, t, end).connect(g); hold(g.gain, t, 0.001, 0.05 * vel, dur * 0.85, 0.01); break; }
       case 'bell': {
-        const car = osc('sine', f, t, end), mod = osc('sine', f * 3.5, t, end), mg = ctx.createGain();
+        const car = osc('sine', f, t, end), mod = osc('sine', f * 3.5, t, end), mg = keep(ctx.createGain());
         mg.gain.setValueAtTime(f * 2, t); mg.gain.setTargetAtTime(f * 0.1, t, 0.12);
         mod.connect(mg); mg.connect(car.frequency); car.connect(g); perc(g.gain, t, 0.002, 0.09 * vel, 0.7);
         break;
@@ -409,7 +467,7 @@
   const LEAD_LV = { saw: 0.07, square: 0.055, sine: 0.11, chip: 0.055, fm: 0.09 };
   S.lead = (t, midi, dur, vel, kind, o) => {
     o = o || {};
-    const f = mtof(midi), end = t + dur + 0.6;
+    const f = mtof(midi), end = t + dur + 0.35;
     const g = vout(busSynth, o.pan || 0, 0.3, 0.3);
     const lp = filt('lowpass', 6000, 1.2); lp.connect(g);
     const oscs = [];
@@ -419,7 +477,7 @@
       case 'square': oscs.push([osc('square', f, t, end), 1], [osc('square', f / 2, t, end, 4), 0.5]); lp.frequency.value = 3200; break;
       case 'chip': oscs.push([osc('pulse', f, t, end), 1]); lp.frequency.value = 9000; break;
       case 'fm': {
-        const car = osc('sine', f, t, end), mod = osc('sine', f * 2, t, end), mg = ctx.createGain();
+        const car = osc('sine', f, t, end), mod = osc('sine', f * 2, t, end), mg = keep(ctx.createGain());
         mg.gain.setValueAtTime(f * 1.6, t); mg.gain.setTargetAtTime(f * 0.4, t, 0.2);
         mod.connect(mg); mg.connect(car.frequency);
         oscs.push([car, 1], [mod, 2]);
@@ -432,12 +490,15 @@
       if (kind !== 'fm' || x === oscs[0][0]) x.connect(lp); // модулятор FM в фильтр не идёт
     }
     // вибрато нарастает к середине ноты
-    const lfo = osc('sine', 5.2 + Math.random() * 0.8, t, end), lg = ctx.createGain();
+    const lfo = osc('sine', 5.2 + Math.random() * 0.8, t, end), lg = keep(ctx.createGain());
     lg.gain.setValueAtTime(0, t); lg.gain.linearRampToValueAtTime(o.vib != null ? o.vib : 10, t + Math.min(dur, 0.4));
     lfo.connect(lg);
     for (const [x] of oscs) lg.connect(x.detune);
     hold(g.gain, t, 0.012, (LEAD_LV[kind] || 0.08) * vel, dur, 0.12);
   };
+
+  for (const k of ['kick', 'snare', 'hat', 'tom', 'crash', 'shaker', 'perc', 'riser', 'impact', 'downlift', 'swell',
+    'bass', 'pad', 'stab', 'pluck', 'lead']) S[k] = voiced(S[k]);
 
   AK.MSynth = S;
 })(window.AK);

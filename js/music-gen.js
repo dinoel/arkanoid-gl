@@ -27,7 +27,38 @@
   };
   MG.nearestRootDeg = (ch, deg) => { let d = deg; while (mod7(d - ch.deg) !== 0) d--; return deg - d > 3 ? d + 7 : d; };
 
-  // ---------- Гармония: марковская цепь по ступеням ----------
+  // ---------- Гармония ----------
+  // Аккорд ступени звучит чисто, если квинта у него чистая: уменьшённые и увеличенные (ii° в миноре,
+  // vii° в мажоре, III+ в гармоническом) заменяются родственным аккордом с двумя общими звуками —
+  // терцией ниже или выше. У расширений убираются резкие варианты: малая нона, тритон вместо кварты,
+  // малая секунда вместо большой.
+  const iv = (mode, deg, k) => MG.deg2midi(0, mode, deg + k) - MG.deg2midi(0, mode, deg);
+  MG.goodDeg = (mode, deg) => iv(mode, deg, 4) === 7;
+  MG.fitChord = (ch, mode) => {
+    let deg = mod7(ch.deg);
+    if (!MG.goodDeg(mode, deg)) deg = [5, 2].map(k => (deg + k) % 7).find(d => MG.goodDeg(mode, d)) ?? 0;
+    let ext = ch.ext;
+    if ((ext === 'add9' && iv(mode, deg, 8) !== 14) || (ext === 'sus2' && iv(mode, deg, 1) !== 2) ||
+      (ext === 'sus4' && iv(mode, deg, 3) !== 5)) ext = 'triad';
+    return { deg, ext };
+  };
+  MG.fitProg = (prog, mode) => prog.map(ch => (ch.abs ? ch : MG.fitChord(ch, mode)));
+
+  // Проверенные последовательности, на которых держится много поп- и электронной музыки
+  const PROGS = {
+    minor: [
+      [[0, 5, 2, 6], 3], [[0, 6, 5, 6], 2], [[5, 6, 0, 0], 1.5], [[0, 5, 3, 4], 2], [[0, 3, 5, 4], 1.5],
+      [[0, 6, 5, 4], 1.5], [[0, 3, 6, 2], 1.5], [[3, 6, 2, 5], 1], [[0, 5, 6, 0], 1.5], [[0, 2, 5, 6], 1],
+      [[0, 3, 0, 4], 1], [[5, 3, 0, 6], 1.2],
+    ],
+    major: [
+      [[0, 4, 5, 3], 3], [[5, 3, 0, 4], 2.5], [[0, 5, 3, 4], 2], [[0, 3, 5, 4], 1.5], [[3, 0, 4, 5], 1.5],
+      [[0, 3, 0, 4], 1], [[0, 2, 5, 3], 1], [[3, 4, 0, 0], 1], [[0, 5, 1, 4], 1.2],
+    ],
+    minor2: [[[0, 5], 2], [[0, 6], 1.5], [[0, 3], 1.5], [[5, 6], 1], [[0, 1], 0.6]],
+    major2: [[[0, 3], 2], [[0, 4], 1], [[0, 5], 1.5], [[3, 4], 1], [[0, 1], 0.6]],
+  };
+  // Марковская цепь по ступеням — для разнообразия
   const TRANS = {
     0: [[3, 2], [5, 3], [6, 2], [2, 1.5], [4, 1.5], [1, 0.5]],
     1: [[4, 3], [6, 1], [3, 1], [0, 0.5]],
@@ -37,20 +68,31 @@
     5: [[6, 3], [3, 2], [2, 2], [0, 1], [4, 1]],
     6: [[0, 3], [2, 2], [5, 1], [3, 0.5]],
   };
-  MG.progression = (r, len, extW) => {
-    const start = r.chance(0.7) ? 0 : r.pick([5, 3, 2]);
-    const degs = [start];
-    for (let i = 1; i < len; i++) degs.push(r.weighted(TRANS[degs[i - 1]]));
-    // каденция: последний аккорд должен вести обратно к первому
-    if (len > 2) {
-      const last = degs[len - 1];
-      if (last === start || !TRANS[last].some(x => x[0] === start)) {
-        const prev = degs[len - 2];
-        const ok = TRANS[prev].filter(x => x[0] !== start && TRANS[x[0]].some(y => y[0] === start));
-        if (ok.length) degs[len - 1] = r.weighted(ok);
+  // Последовательность из len аккордов (2, 4 или 8) для лада mode: чаще из проверенных, иногда цепью
+  MG.progression = (r, len, extW, mode = 'aeolian') => {
+    const minor = !!MG.MINOR[mode];
+    let degs;
+    if (r.chance(0.7)) {
+      if (len <= 2) degs = r.weighted(PROGS[minor ? 'minor2' : 'major2']).slice(0, len);
+      else {
+        const list = PROGS[minor ? 'minor' : 'major'], a = r.weighted(list);
+        degs = len > 4 ? a.concat(r.chance(0.5) ? a : r.weighted(list)) : a.slice(0, len);
+      }
+    } else {
+      const start = r.chance(0.7) ? 0 : r.pick([5, 3, 2]);
+      degs = [start];
+      for (let i = 1; i < len; i++) degs.push(r.weighted(TRANS[degs[i - 1]]));
+      // каденция: последний аккорд должен вести обратно к первому
+      if (len > 2) {
+        const last = degs[len - 1];
+        if (last === start || !TRANS[last].some(x => x[0] === start)) {
+          const prev = degs[len - 2];
+          const ok = TRANS[prev].filter(x => x[0] !== start && TRANS[x[0]].some(y => y[0] === start));
+          if (ok.length) degs[len - 1] = r.weighted(ok);
+        }
       }
     }
-    return degs.map(deg => ({ deg, ext: r.weighted(extW) }));
+    return degs.map(deg => MG.fitChord({ deg, ext: r.weighted(extW) }, mode));
   };
 
   // Голосоведение: обращение аккорда, ближайшее к предыдущему звучанию
@@ -267,13 +309,17 @@
   };
 
   // ---------- Арпеджио ----------
+  // Рисунки по звукам аккорда (номера снизу вверх): вместо случайных — узнаваемые фигуры
+  const ARP_PATS = [[0, 1, 2, 1], [0, 2, 1, 2], [0, 1, 2, 3], [0, 2, 3, 1], [0, 1, 0, 2], [0, 2, 4, 2], [3, 2, 1, 0],
+    [0, 1, 2, 3, 4, 3, 2, 1], [0, 2, 1, 3, 2, 4], [0, 0, 2, 1]];
+  MG.arpPat = r => r.pick(ARP_PATS).slice();
   MG.arp = r => ({
-    mode: r.weighted([['up', 3], ['down', 1.5], ['updown', 2], ['random', 1], ['pattern', 2.5], ['broken', 1.5]]),
+    mode: r.weighted([['up', 3], ['down', 1.2], ['updown', 2.5], ['pattern', 3], ['broken', 1.5]]),
     rate: r.weighted([[1, 4], [2, 2.5], [3, 1.2]]), // 16-е, 8-е, триоли
-    oct: r.int(1, 3),
+    oct: r.weighted([[1, 3], [2, 2]]),
     gate: r.range(0.35, 0.9),
     mask: Array.from({ length: 16 }, (_, i) => i % 4 === 0 || r.chance(0.8)),
-    pat: Array.from({ length: r.pick([3, 4, 5, 6, 8]) }, () => r.int(0, 6)),
+    pat: MG.arpPat(r),
     pan: r.range(0.2, 0.6),
   });
   MG.arpNote = (a, tones, i) => {
@@ -291,21 +337,48 @@
   };
 
   // ---------- Мелодия ----------
-  // Мотив: ритм на такт + контур (шаги по ступеням между соседними нотами)
+  // Ритмы мотива на такт (шаги 16-х): редкие, средние, плотные
+  const RHY = [
+    [[0, 8], [0, 6, 12], [0, 4, 8], [0, 10], [0, 3, 8], [0, 6, 10], [0, 8, 12], [0, 4, 12]],
+    [[0, 3, 6, 10], [0, 4, 6, 8, 12], [0, 2, 4, 8, 12], [0, 3, 6, 8, 12], [0, 4, 7, 10], [2, 4, 8, 12],
+      [0, 6, 8, 12, 14], [0, 3, 6, 12, 14], [0, 4, 8, 10, 12]],
+    [[0, 2, 4, 6, 8, 12], [0, 2, 3, 6, 8, 10, 12], [0, 3, 6, 8, 10, 12, 14], [0, 2, 4, 7, 8, 10, 12],
+      [0, 3, 4, 6, 8, 11, 12, 14]],
+  ];
+  // Мотив: ритм на такт + контур (шаги по ступеням между соседними нотами). Ритм чаще берётся из готовых,
+  // контур — дуга, впадина, подъём, спуск или волна; ходы в основном поступенные, а после скачка мелодия
+  // делает шаг назад, заполняя его.
   MG.motif = (r, density) => {
+    const tier = density < 0.35 ? r.weighted([[0, 2], [1, 1]])
+      : density < 0.8 ? r.weighted([[0, 0.6], [1, 3], [2, 0.6]]) : r.weighted([[1, 2], [2, 1.5]]);
+    const steps = r.chance(0.8) ? r.pick(RHY[tier]) : freeRhythm(r, density);
+    const shape = r.weighted([['arch', 3], ['valley', 1.5], ['rise', 1.5], ['fall', 2], ['wave', 2]]);
+    const n = steps.length;
+    let prev = 0;
+    return steps.map((s, i) => {
+      const nx = i + 1 < n ? steps[i + 1] : 16;
+      const len = Math.max(1, (nx - s) * (i === n - 1 ? r.range(0.6, 1) : r.chance(0.2) ? 0.5 : r.range(0.75, 1)));
+      let d = 0;
+      if (i > 0) {
+        const x = i / (n - 1);
+        let dir = shape === 'arch' ? (x <= 0.5 ? 1 : -1) : shape === 'valley' ? (x <= 0.5 ? -1 : 1)
+          : shape === 'rise' ? 1 : shape === 'fall' ? -1 : Math.floor(i / 2) % 2 ? -1 : 1;
+        if (r.chance(0.18)) dir = -dir;
+        d = Math.abs(prev) >= 3 ? -Math.sign(prev) : dir * r.weighted([[1, 6], [2, 3], [0, 0.8], [3, 0.7], [4, 0.35]]);
+      }
+      prev = d;
+      return { s, len, d };
+    });
+  };
+  // Свободный ритм: ноты чаще на долях
+  function freeRhythm(r, density) {
     const k = Math.round(r.range(2.5, 4.2) + density * 3);
     const cand = [];
     for (let s = 0; s < 16; s++) cand.push([s, s % 4 === 0 ? 3 : s % 2 === 0 ? 2 : 0.8]);
     const on = new Set([r.pick([0, 0, 0, 2, 4])]);
     for (let g = 0; on.size < k && g < 100; g++) on.add(r.weighted(cand));
-    const steps = [...on].sort((a, b) => a - b);
-    return steps.map((s, i) => {
-      const nx = i + 1 < steps.length ? steps[i + 1] : 16;
-      const len = Math.max(1, (nx - s) * (r.chance(0.25) ? 0.5 : r.range(0.75, 1)));
-      const d = i === 0 ? 0 : r.weighted([[-1, 3], [1, 3], [-2, 1.4], [2, 1.4], [0, 0.8], [3, 0.5], [-3, 0.5], [4, 0.25], [-4, 0.25]]);
-      return { s, len, d };
-    });
-  };
+    return [...on].sort((a, b) => a - b);
+  }
 
   MG.varyMotif = (r, m, how) => {
     const v = m.map(n => Object.assign({}, n));
@@ -337,36 +410,63 @@
     return v;
   };
 
-  // Фраза на 4 такта по схеме вида A A' B A'' (с каденцией на корень в конце).
+  // Звук аккорда, ближайший к deg; при равенстве — в сторону хода dir, чтобы контур не ломался
+  function snap(ch, deg, dir) {
+    for (let k = 0; k <= 3; k++) {
+      const a = dir > 0 ? deg + k : deg - k, b = dir > 0 ? deg - k : deg + k;
+      if (MG.isChordDeg(ch, a)) return a;
+      if (MG.isChordDeg(ch, b)) return b;
+    }
+    return deg;
+  }
+  const into = (deg, lo, hi) => { while (deg > hi) deg -= 7; while (deg < lo) deg += 7; return deg; };
+
+  // Фраза на 4 такта по схеме вида A A' B A'' (у B свой мотив или обращённый A). Ноты на сильных долях
+  // и долгие — из аккорда, быстрые на слабых могут быть проходящими. У края диапазона ход разворачивается,
+  // а не прыгает на октаву. Второй такт кончается вопросом — долгой нотой аккорда, но не основным тоном,
+  // последний — ответом на основном тоне. chords — по аккорду на такт или на каждые полтакта (8 штук).
   MG.phrase = (r, chords, motif, opts) => {
     const lo = opts.lo, hi = opts.hi;
     const B = r.chance(0.5) ? MG.motif(r, opts.density) : MG.varyMotif(r, motif, r.pick(['invert', 'retro']));
     const plan = r.pick([['A', 'A1', 'B', 'A2'], ['A', 'B', 'A1', 'B2'], ['A', 'A', 'B', 'A2'], ['A', 'A1', 'A', 'B2'], ['A', 'B', 'A', 'B2']]);
-    let last = opts.start != null ? opts.start : Math.round((lo + hi) / 2);
-    return plan.map((p, bi) => {
-      const ch = chords[bi % chords.length];
+    const chAt = (bi, st) => (chords.length >= 8 ? chords[bi * 2 + (st >= 8 ? 1 : 0)] : chords[bi % chords.length]);
+    let last = opts.start != null ? into(opts.start, lo, hi) : Math.round((lo + hi) / 2);
+    let top = -Infinity;
+    const bars = plan.map((p, bi) => {
       let m = p[0] === 'A' ? motif : B;
       if (p[1] === '1') m = MG.varyMotif(r, m, r.pick(['tail', 'rhythm', 'ornament']));
       if (p[1] === '2') m = MG.varyMotif(r, m, 'tail');
-      let deg = MG.nearestChordDeg(ch, last);
+      let deg = last;
       const out = [];
       m.forEach((n, i) => {
-        if (i > 0) deg += n.d;
-        if (n.s % 4 === 0 && !MG.isChordDeg(ch, deg)) deg = MG.nearestChordDeg(ch, deg);
-        while (deg > hi) deg -= 7;
-        while (deg < lo) deg += 7;
+        const ch = chAt(bi, n.s);
+        if (i === 0) deg = snap(ch, last, 0);
+        else {
+          const d = deg + n.d > hi || deg + n.d < lo ? -n.d : n.d;
+          deg += d;
+          if (n.s % 4 === 0 || n.len >= 3) deg = snap(ch, deg, d);
+        }
+        deg = into(deg, lo, hi);
+        top = Math.max(top, deg);
         out.push({ s: n.s, len: n.len, deg, vel: n.s % 4 === 0 ? 1 : 0.8 });
       });
-      if (p[1] === '2' && out.length) {
-        const L = out[out.length - 1];
-        L.deg = MG.nearestRootDeg(ch, L.deg);
-        if (L.deg > hi) L.deg -= 7;
-        if (L.deg < lo) L.deg += 7;
+      const L = out[out.length - 1];
+      if (L && bi === 3) {
+        L.deg = into(MG.nearestRootDeg(chAt(bi, L.s), L.deg), lo, hi);
         L.len = Math.max(L.len, 16 - L.s);
+      } else if (L && bi === 1 && L.s >= 6) {
+        const ch = chAt(bi, L.s);
+        let d = snap(ch, L.deg, 0);
+        if (mod7(d - ch.deg) === 0) d = snap(ch, d + (d + 2 <= hi ? 2 : -2), 0);
+        L.deg = into(d, lo, hi);
+        L.len = Math.max(L.len, Math.min(16 - L.s, 4));
       }
       if (out.length) last = out[out.length - 1].deg;
       return out;
     });
+    // вершина фразы чуть громче
+    for (const b of bars) for (const n of b) if (n.deg === top) n.vel = Math.min(1.1, n.vel + 0.1);
+    return bars;
   };
 
   AK.MGen = MG;

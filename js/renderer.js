@@ -4,14 +4,17 @@
 (function (AK) {
   const W = 720, H = 960;
   const R = { W, H, ok: false };
+  const MAX_TOP = 12; // прожекторов, которые светят на верх кирпичей
+  const TOP_H = 60;   // на сколько px лампы выше верха кирпичей
+  const TOP_K = 0.7;  // доля света на верх: светлый кирпич не должен пересвечиваться до белого
 
   const VS_MAIN = `#version 300 es
   layout(location=0) in vec2 a_pos;
   layout(location=1) in vec4 a_col;
   layout(location=2) in vec3 a_uv;
-  layout(location=3) in vec3 a_lit;
+  layout(location=3) in vec4 a_lit;
   uniform vec4 u_view;
-  out vec4 v_col; out vec3 v_uv; out vec3 v_lit;
+  out vec4 v_col; out vec3 v_uv; out vec4 v_lit;
   void main() {
     v_col = a_col; v_uv = a_uv; v_lit = a_lit;
     gl_Position = vec4(a_pos * u_view.xy + u_view.zw, 0.0, 1.0);
@@ -19,10 +22,32 @@
 
   const FS_MAIN = `#version 300 es
   precision highp float;
-  in vec4 v_col; in vec3 v_uv; in vec3 v_lit;
+  in vec4 v_col; in vec3 v_uv; in vec4 v_lit;
   uniform sampler2D u_light; uniform vec2 u_res; uniform vec3 u_amb; uniform float u_gi;
+  // прожекторы для верха кирпичей: xy — источник (px поля со встряской), z — его радиус; xy — ось луча,
+  // zw — косинусы внешнего и внутреннего края конуса; излучение
+  uniform int u_ns; uniform vec3 u_sp[${MAX_TOP}]; uniform vec4 u_sd[${MAX_TOP}]; uniform vec3 u_sc[${MAX_TOP}];
   out vec4 o;
   float lum(vec3 c) { return dot(c, vec3(0.3, 0.5, 0.2)); }
+  // Прямой свет прожекторов на верх кирпича. На пол свет считают каскады, и кирпич его заслоняет; но лампы
+  // висят выше кирпичей, так что на их верх свет попадает, и друг от друга кирпичи его не загораживают.
+  // Считаем, как каскады на полу: диск источника виден под долей направлений ≈ r / πD, — только расстояние
+  // берём с высотой лампы над кирпичом и света даём меньше (TOP_K): кирпичи светлее пола и иначе выгорают
+  // до белого. n — нормаль фаски (0 — сама грань): обращённая к лампе светлее.
+  vec3 topLight(vec2 p, vec2 n) {
+    vec3 s = vec3(0.0);
+    for (int i = 0; i < ${MAX_TOP}; i++) {
+      if (i >= u_ns) break;
+      vec2 d = p - u_sp[i].xy;
+      float D = max(length(d), 1e-3);
+      float cone = smoothstep(u_sd[i].z, u_sd[i].w, dot(d / D, u_sd[i].xy));
+      if (cone <= 0.0) continue;
+      float k = cone * ${TOP_K / Math.PI} * u_sp[i].z / sqrt(D * D + ${TOP_H * TOP_H}.0);
+      if (n != vec2(0.0)) k *= clamp(0.7 - 0.6 * dot(n, d / D), 0.1, 1.3);
+      s += u_sc[i] * k;
+    }
+    return s;
+  }
   vec4 shape() {
     float m = v_uv.z;
     if (m < 0.5) return v_col;
@@ -62,6 +87,10 @@
         float gm = length(gd);
         float dk = clamp(gm / (lum(Lc) + 0.03) * 4.0, 0.0, 1.0);
         if (gm > 1e-6) Lc *= 1.0 + 0.75 * dot(normalize(v_lit.yz), gd / gm) * dk;
+      }
+      if (v_lit.w > 0.0) {
+        vec2 p = vec2(gl_FragCoord.x / u_res.x, 1.0 - gl_FragCoord.y / u_res.y) * vec2(${W}.0, ${H}.0);
+        Lc += topLight(p, v_lit.yz != vec2(0.0) ? normalize(v_lit.yz) : vec2(0.0)) * v_lit.w;
       }
       vec3 L = u_amb + Lc;
       L /= 1.0 + L * 0.06; // мягкий предел у самого источника
@@ -191,12 +220,12 @@
   let vao, vbo, fullVao;
   let T = null; // render targets
   let hdr = false;
-  const FL = 12, MAXV = 3 * 40000;
+  const FL = 13, MAXV = 3 * 40000;
   const data = new Float32Array(MAXV * FL);
   let nv = 0;
   let cr = 1, cg = 1, cb = 1, ca = 1;
   let dr = 1, dg = 1, db = 1, da = 1;
-  let cl = 0, clx = 0, cly = 0; // освещение текущих примитивов (см. R.lit)
+  let cl = 0, clx = 0, cly = 0, clt = 0; // освещение текущих примитивов (см. R.lit)
   let uView;
 
   function compile(type, src) {
@@ -258,7 +287,7 @@
     gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, st, 0);
     gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.FLOAT, false, st, 8);
     gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, st, 24);
-    gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 3, gl.FLOAT, false, st, 36);
+    gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3, 4, gl.FLOAT, false, st, 36);
 
     fullVao = gl.createVertexArray();
     gl.bindVertexArray(fullVao);
@@ -322,7 +351,7 @@
     gl.uniform4f(uView, 2 / W, -2 / H, -1 + (2 * shx) / W, 1 - (2 * shy) / H);
     gl.bindVertexArray(vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-    nv = 0; cl = clx = cly = 0;
+    nv = 0; cl = clx = cly = clt = 0;
   }
 
   // Сцена освещения: rgb — излучение, альфа — заслонка. Рисуется теми же примитивами в низком разрешении.
@@ -381,6 +410,25 @@
     gl.uniform1i(pMain.u.u_light, 3);
     gl.uniform2f(pMain.u.u_res, canvas.width, canvas.height);
     gl.uniform3fv(pMain.u.u_amb, R.amb);
+    gl.uniform1i(pMain.u.u_ns, top.n);
+    if (top.n) {
+      for (let i = 0; i < top.n; i++) { top.ps[i * 3] = top.p[i * 3] + shx; top.ps[i * 3 + 1] = top.p[i * 3 + 1] + shy; top.ps[i * 3 + 2] = top.p[i * 3 + 2]; }
+      gl.uniform3fv(pMain.u.u_sp, top.ps); gl.uniform4fv(pMain.u.u_sd, top.d); gl.uniform3fv(pMain.u.u_sc, top.c);
+    }
+  };
+
+  // Прожекторы, которые светят на верх кирпичей в этом кадре (задаются до R.begin): x, y — источник в px поля,
+  // r — его радиус, ang — ось луча, half — полуугол конуса, soft — доля полуугла, на которой свет гаснет
+  // к краю (как у R.giSpot), col — излучение.
+  const top = { n: 0, p: new Float32Array(MAX_TOP * 3), ps: new Float32Array(MAX_TOP * 3), d: new Float32Array(MAX_TOP * 4), c: new Float32Array(MAX_TOP * 3) };
+  R.topLights = function (list) {
+    top.n = Math.min(list.length, MAX_TOP);
+    for (let i = 0; i < top.n; i++) {
+      const s = list[i];
+      top.p.set([s.x, s.y, s.r], i * 3);
+      top.d.set([Math.cos(s.ang), Math.sin(s.ang), Math.cos(s.half), Math.cos(s.half * (1 - s.soft))], i * 4);
+      top.c.set(s.col, i * 3);
+    }
   };
 
   function flush() {
@@ -444,13 +492,14 @@
     const i = nv * FL;
     data[i] = x; data[i + 1] = y; data[i + 2] = r; data[i + 3] = g; data[i + 4] = b; data[i + 5] = a;
     data[i + 6] = u; data[i + 7] = v; data[i + 8] = m;
-    data[i + 9] = cl; data[i + 10] = clx; data[i + 11] = cly;
+    data[i + 9] = cl; data[i + 10] = clx; data[i + 11] = cly; data[i + 12] = clt;
     nv++;
   }
 
   // Освещение следующих примитивов: k — доля освещения (0 — светится сам, 1 — только отражает свет),
-  // ox, oy — смещение в px, откуда брать свет (для граней, обращённых наружу).
-  R.lit = (k = 0, ox = 0, oy = 0) => { cl = k; clx = ox; cly = oy; };
+  // ox, oy — смещение в px, откуда брать свет (для граней, обращённых наружу); top — это верх кирпича,
+  // и на него светят прожекторы (см. R.topLights).
+  R.lit = (k = 0, ox = 0, oy = 0, top = 0) => { cl = k; clx = ox; cly = oy; clt = top; };
 
   // add: 0 — обычное смешивание, 1 — аддитивное (свечение)
   R.color = (r, g, b, a = 1, add = 0) => { cr = r * a; cg = g * a; cb = b * a; ca = a * (1 - add); };

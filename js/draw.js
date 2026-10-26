@@ -102,11 +102,7 @@
     R.rect(L - 4, T, 4, H - T); R.rect(RX, T, 4, H - T); R.rect(L - 4, T - 4, RX - L + 8, 4);
     // прожекторы светят только в свой конус (см. gi.js); в список источников — раньше мячей, чтобы при
     // мультиболе в растр уходили лишние мячи, а не прожекторы. Источник — чуть впереди линзы, целиком в поле.
-    for (const q of g.spots) {
-      const c = q.c, a = q.a, e = E_SPOT * q.e, [x, y] = spotBase(q, sb);
-      const d = SPOT_LENS + 3;
-      R.giSpot(x + Math.cos(a) * d, y + Math.sin(a) * d, 3.5, c[0] * e, c[1] * e, c[2] * e, a, q.half, 0.3);
-    }
+    for (const s of spotLights(g)) R.giSpot(s.x, s.y, s.r, s.col[0], s.col[1], s.col[2], s.ang, s.half, s.soft);
     // кирпичи заслоняют свет и слабо светятся своим цветом; взрывные тлеют оранжевым; удар вспыхивает
     for (const k of g.bricks) {
       if (!k.alive) continue;
@@ -173,6 +169,19 @@
   }
   const sb = [0, 0];
   const SPOT_LENS = 10; // линза — на таком расстоянии от крепления вдоль оси
+  // Источники света прожекторов в этом кадре — для каскадов (пол) и для верха кирпичей (renderer.js)
+  const lights = [];
+  function spotLights(g) {
+    g.spots.forEach((q, i) => {
+      const s = lights[i] || (lights[i] = { col: [0, 0, 0] });
+      const [x, y] = spotBase(q, sb), d = SPOT_LENS + 3, e = E_SPOT * q.e;
+      s.x = x + Math.cos(q.a) * d; s.y = y + Math.sin(q.a) * d; s.r = 3.5;
+      s.ang = q.a; s.half = q.half; s.soft = 0.3;
+      s.col[0] = q.c[0] * e; s.col[1] = q.c[1] * e; s.col[2] = q.c[2] * e;
+    });
+    lights.length = g.spots.length;
+    return lights;
+  }
   // дымка луча — на полу, под кирпичами; при глобальном освещении конус и так виден по полу, дымка слабее
   function spotBeams(g) {
     const k = R.gi ? 0.07 : 0.12;
@@ -252,7 +261,7 @@
         const d = nx * LX + ny * LY;
         const sh = 0.72 + 0.4 * d + shimmer;
         const hi = steel || k.kind === 'strong' ? 0.14 * Math.max(0, d) ** 2 : 0.05 * Math.max(0, d);
-        R.lit(LIT_BRICK, nx * 4, ny * 4);
+        R.lit(LIT_BRICK, nx * 4, ny * 4, 1);
         R.color(r * sh + hi, gg * sh + hi, b * sh + hi, 1);
       } else {
         const d = nx * LX + ny * LY;
@@ -264,7 +273,7 @@
     }
     // грань
     if (gi) {
-      R.lit(LIT_BRICK);
+      R.lit(LIT_BRICK, 0, 0, 1);
       R.color(r * 0.8, gg * 0.8, b * 0.8, 1);
       R.color2(r * 0.95, gg * 0.95, b * 0.95, 1);
       R.polyShade(wi, k.x, k.y, LX, LY, 0.15);
@@ -287,11 +296,11 @@
       const pulse = 0.5 + 0.5 * Math.sin(t * 6 + k.phase);
       R.lit(0);
       R.color(1, 0.5, 0.12, (0.35 + 0.35 * pulse) * (gi ? 0.5 : 1), 1); R.soft(k.x, k.y, k.rad * 1.5 * s);
-      R.lit(gi ? LIT_BRICK : 0);
+      R.lit(gi ? LIT_BRICK : 0, 0, 0, 1);
       R.color(0.2, 0.03, 0.02, 0.9); R.disc(k.x, k.y, k.rad * 0.36 * s);
       R.lit(0);
       R.color(1, 0.85 + 0.15 * pulse, 0.4, 1, 1); R.disc(k.x, k.y, k.rad * (0.12 + 0.06 * pulse) * s);
-      R.lit(gi ? LIT_BRICK : 0);
+      R.lit(gi ? LIT_BRICK : 0, 0, 0, 1);
     }
     // трещины
     if (k.cracks.length) {
@@ -318,7 +327,7 @@
       // летящий осколок чуть светится — его можно поймать
       R.lit(0);
       if (d.rest < 0.3) { R.color(r, gg, b, (0.16 + 0.07 * Math.sin(d.age * 9 + d.x)) * a, 1); R.soft(d.x, d.y, d.r * 3.2); }
-      R.lit(R.gi ? 0.9 : 0);
+      R.lit(R.gi ? 0.9 : 0, 0, 0, 1);
       R.color(r * 0.8, gg * 0.8, b * 0.8, a);
       R.poly(w);
       const n = w.length / 2;
@@ -328,7 +337,7 @@
         const ex = w[j * 2] - w[i * 2], ey = w[j * 2 + 1] - w[i * 2 + 1], l = Math.hypot(ex, ey) || 1;
         const nx = (o * ey) / l, ny = (-o * ex) / l;
         const sh = (R.gi ? 0.75 : 0.55) + (R.gi ? 0.4 : 0.6) * (nx * LX + ny * LY);
-        if (R.gi) R.lit(0.9, nx * 3, ny * 3);
+        if (R.gi) R.lit(0.9, nx * 3, ny * 3, 1);
         R.color(Math.min(1, r * sh), Math.min(1, gg * sh), Math.min(1, b * sh), a);
         R.line(w[i * 2], w[i * 2 + 1], w[j * 2], w[j * 2 + 1], 1.6);
       }
@@ -560,6 +569,7 @@
       const sx = (Math.random() * 2 - 1) * g.shake, sy = (Math.random() * 2 - 1) * g.shake;
       AK.Show.update(g, t);
       if (R.beginGI(sx, sy)) { giScene(g, t); R.endGI(SKY); }
+      R.topLights(R.gi ? spotLights(g) : []);
       R.begin(t, sx, sy, g.lv.c1, g.lv.c2);
       gravityGrid(g);
       spotBeams(g);

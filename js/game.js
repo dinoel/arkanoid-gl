@@ -781,7 +781,8 @@
     if (G.paused) { if (G.magnet) { G.magnet = 0; sfx('magnet', 0, 0); } return; }
     G.acc = Math.min(G.acc + dt, STEP * 10);
     while (G.acc >= STEP) { step(STEP); G.acc -= STEP; }
-    sfx('magnet', G.magnet, pan(G.paddle.x));
+    // гул магнита глушим и в демо: если проиграть с зажатой кнопкой, иначе он так и гудел бы
+    A.magnet(G.demo ? 0 : G.magnet, pan(G.paddle.x));
     const f = Math.exp(-dt * 7);
     G.shake *= f; G.aberr *= f; G.flash *= Math.exp(-dt * 5);
     G.gview += ((G.gravity ? 1 : 0) - G.gview) * (1 - Math.exp(-dt * 4)); // сетка поля плавно распрямляется
