@@ -457,15 +457,20 @@
   // и долгие — из аккорда, быстрые на слабых могут быть проходящими. У края диапазона ход разворачивается,
   // а не прыгает на октаву. Второй такт кончается вопросом — долгой нотой аккорда, но не основным тоном,
   // последний — ответом на основном тоне. chords — по аккорду на такт или на каждые полтакта (8 штук).
+  // opts.vary — вариант фразы: другая схема и другой второй мотив (иногда новый, контрастный). Без него —
+  // сама тема: A B A B2.
   MG.phrase = (r, chords, motif, opts) => {
     const lo = opts.lo, hi = opts.hi;
-    const B = MG.varyMotif(r, motif, 'tail');
-    const plan = ['A', 'B', 'A', 'B2'];
+    const B = !opts.vary ? MG.varyMotif(r, motif, 'tail')
+      : r.chance(0.3) ? MG.motif(r, opts.density, opts.style)
+      : MG.varyMotif(r, motif, r.pick(['tail', 'invert', 'retro', 'rhythm']));
+    const plan = !opts.vary ? ['A', 'B', 'A', 'B2']
+      : r.pick([['A', 'A1', 'B', 'A2'], ['A', 'B', 'A1', 'B2'], ['A', 'A1', 'A', 'B2'], ['B', 'A1', 'B', 'A2']]);
     const chAt = (bi, st) => (chords.length >= 8 ? chords[bi * 2 + (st >= 8 ? 1 : 0)] : chords[bi % chords.length]);
     let last = motif[0].p ?? Math.round((lo + hi) / 2);
     let top = -Infinity;
     const bars = plan.map((p, bi) => {
-      let m = p[0] === 'A' ? motif : B;
+      let m = bi === 0 && opts.head ? opts.head : p[0] === 'A' ? motif : B; // head — такт темы, с которого начинается фраза
       if (p[1] === '1') m = MG.varyMotif(r, m, r.pick(['tail', 'rhythm', 'ornament']));
       if (p[1] === '2') m = MG.varyMotif(r, m, 'tail');
       let deg = last;

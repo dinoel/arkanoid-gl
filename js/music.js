@@ -202,7 +202,7 @@
     heard.length = 0; lastHeard = null;
     steps.length = lit.length = 0; stepN = 0;
     song.nextT = ctx ? ctx.currentTime + 0.05 : 0;
-    if (ctx) { S.stop(); S.setTempo(song.bpm); }
+    if (ctx) { S.stop(0.1); S.setTempo(song.bpm); } // прошлая песня гаснет, а не обрывается
     activate(makeSection('intro', null), song.nextT);
     return song.seed;
   };
@@ -305,11 +305,12 @@
     // под мелодией середина не забивается: арпеджио или стабы, редко всё сразу
     if (s.useLead && s.useArp && s.useStab && r.chance(0.6)) { if (r.chance(0.5)) s.useArp = false; else s.useStab = false; }
     // Мелодия. В дропе звучит тема песни — тот же мотив и те же фразы (они общие на всю песню), поэтому
-    // дроп узнаётся. В других секциях мотив вырастает из темы или из предыдущей секции, изредка новый.
+    // дроп узнаётся. В других секциях мотив — тема или её вариация (из темы или из предыдущей секции).
     if (type === 'drop') { s.motif = th.motif; s.phrases = th.phrases; }
     else {
       const base = prev && prev.motif && r.chance(0.4) ? prev.motif : th.motif;
-      s.motif = type === 'bridge' ? MG.varyMotif(r, base, 'invert') : clone(th.motif);
+      s.motif = type === 'bridge' ? MG.varyMotif(r, base, 'invert')
+        : r.chance(0.35) ? clone(th.motif) : MG.varyMotif(r, base, r.pick(['tail', 'rhythm', 'ornament']));
       s.phrases = {};
     }
     if (!s.usePad && !s.useArp && !s.useLead && !s.useStab) s.usePad = true;
@@ -446,15 +447,26 @@
     if (p(0.18)) s.useStab = !s.useStab && s.def.stab > 0;
     if (p(0.15) && s.type !== 'build') s.useArp = !s.useArp;
     if (!s.useLead && s.def.lead > 0 && p(0.3 * (0.5 + inten))) s.useLead = true;
-    if (s.type !== 'drop' && p(0.12)) s.phrases = {}; // новая мелодия на старой гармонии (в дропе — тема)
+    // новая мелодия на старой гармонии (в дропе — тема)
+    if (s.type !== 'drop' && p(0.12)) {
+      s.phrases = {};
+      if (r.chance(0.5)) s.motif = MG.varyMotif(r, s.motif, r.pick(['tail', 'rhythm', 'ornament']));
+    }
   }
 
+  // Мелодия идёт периодами по 8 тактов: первая фраза открывается тактом темы и продолжает мотивом секции,
+  // вторая ей отвечает — другой схемой и другим продолжением. Тема узнаётся в каждой секции (кроме бриджа —
+  // он контрастный), а одна и та же фраза не повторяется четыре такта за четырьмя.
   function getPhrase(s, bar) {
     const chords = []; // по аккорду на каждые полтакта: аккорды могут меняться посреди такта
     for (let h = 0; h < 8; h++) chords.push(chordAt(s, bar + (h >> 1), (h & 1) * 8));
-    const key = s.mode + ':' + chords.map(c => c.deg + c.ext).join(',');
+    const answer = Math.floor(bar / 4) % 2 === 1;
+    const key = (answer ? 'b:' : 'a:') + s.mode + ':' + chords.map(c => c.deg + c.ext).join(',');
     if (!s.phrases[key]) {
-      s.phrases[key] = MG.phrase(r, chords, s.motif, { lo: 0, hi: 10, density: s.def.e });
+      s.phrases[key] = MG.phrase(r, chords, s.motif, {
+        lo: 0, hi: 10, density: s.def.e, vary: answer, style: song.palName,
+        head: answer || s.type === 'bridge' ? null : song.theme.motif,
+      });
     }
     return s.phrases[key];
   }
@@ -750,14 +762,28 @@
 
   M.event = name => {
     if (!ctx || !AK.A.playing || !AK.A.musicOn) return;
-    if (name === 'lose') {
+    const s = song.sec;
+    if (name === 'lose' && s) {
       S.dip();
-      M.queue('break');
+      if (s.type === 'break' || (s.next && s.next.type === 'break')) return;
+      if (s.type === 'build') {
+        // нарастание не обрывается: дроп всё равно наступает, но короткий, и за ним брейк
+        if (!s.next || s.next.type !== 'drop') planNext(s, 'drop');
+        s.next.len = Math.min(s.next.len, 4);
+        song.pending = 'break';
+        return;
+      }
+      // брейк — с чётной тактовой черты секции (сетка фраз не ломается), а на связку остаётся
+      // хотя бы полтакта
+      let end = song.bar + 1;
+      if (end % 2) end++; else if (song.step > 8) end += 2;
+      s.len = Math.min(s.len, end);
+      song.pending = null;
+      planNext(s, 'break');
     }
-    if (name === 'clear') {
-      if (!cfg.mute.drums) S.crash(ctx.currentTime, 0.7);
-      M.queue(song.sec && song.sec.type === 'build' ? 'drop' : 'build');
-    }
+    // Уровень пройден: тарелка. Через пару секунд игра начинает новую песню, и звучащая плавно гаснет
+    // под её начало, поэтому нарастание здесь не запускается — оно бы оборвалось на полуслове.
+    if (name === 'clear' && !cfg.mute.drums) S.crash(ctx.currentTime, 0.7);
   };
 
   // ---------- Ручное управление (music.html) ----------

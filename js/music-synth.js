@@ -119,12 +119,14 @@
   };
   S.expression = (t, energy) => color.frequency.setTargetAtTime(2800 + 9500 * energy, t, 0.22);
   S.gate = on => transport.gain.setTargetAtTime(on ? 1 : 0, ctx.currentTime, 0.012);
-  S.stop = () => {
+  // fade — постоянная времени затухания: на паузе звук обрывается сразу, а при смене песни
+  // звучащие ноты гаснут за полсекунды под начало новой; ноты, расписанные вперёд, не звучат вовсе
+  S.stop = (fade = 0.004) => {
     // Also cancel sources scheduled in the lookahead, so a new song cannot play the previous hook.
-    const t = ctx.currentTime;
+    const t = ctx.currentTime, end = t + 0.02 + fade * 5;
     for (const nodes of active) for (const n of nodes) {
-      if (n._end != null) { try { n.stop(t + 0.02); } catch (_) { /* already ended */ } }
-      if (n._envelope) { cancelFrom(n.gain, t); n.gain.setTargetAtTime(0, t, 0.004); }
+      if (n._end != null && n._end > end) { try { n.stop(end); n._end = end; } catch (_) { /* already ended */ } }
+      if (n._envelope) { cancelFrom(n.gain, t); n.gain.setTargetAtTime(0, t, fade); }
     }
     openHat = null;
   };

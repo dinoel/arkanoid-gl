@@ -100,14 +100,60 @@ test('mute/pause/new song discard stale cues and preserve bounded scheduling on 
   assert.ok(q.calls.slice(before).every(e => e.args[0] >= 100), 'no burst of late notes after a stall');
 });
 
-test('game events resolve at the next bar and intensity changes arrangement within one bar', () => {
+test('intensity changes arrangement within one bar; a lost ball breaks on an even bar; a clear only crashes', () => {
   const q = rig('synthwave', 19, 0.1);
   q.M.queue('drop'); q.render(4);
   const quiet = q.M.state().intensity;
   q.M.setIntensity(1); q.render(7);
   assert.ok(q.M.state().intensity > quiet + 0.35);
-  q.M.event('lose'); q.render(10); assert.equal(q.M.state().section, 'break');
-  q.M.event('clear'); q.render(13); assert.equal(q.M.state().section, 'build');
+  q.M.event('lose');
+  const st = q.M.state(), bar = 240 / st.bpm;
+  assert.equal(st.next, 'break');
+  assert.equal(st.len % 2, 0, 'the section ends on an even bar line');
+  q.render(q.c.currentTime + bar * 2.6); assert.equal(q.M.state().section, 'break');
+  const before = q.calls.length, next = q.M.state().next;
+  q.M.event('clear');
+  assert.ok(q.calls.slice(before).some(e => e.name === 'crash'));
+  assert.equal(q.M.state().next, next, 'the game starts a new song next, so no build is started to be cut off');
+});
+
+test('a ball lost during a build still lands a short drop before the break', () => {
+  const q = rig('dnb', 5, 0.5);
+  q.M.queue('build'); q.render(3);
+  assert.equal(q.M.state().section, 'build');
+  q.M.event('lose');
+  assert.equal(q.M.state().next, 'drop');
+  const seen = [], end = q.c.currentTime + 40;
+  for (let t = q.c.currentTime; t < end; t += 0.25) {
+    q.render(t); const s = q.M.state(), x = s.section + ':' + s.len;
+    if (seen[seen.length - 1] !== x) seen.push(x);
+  }
+  const i = seen.indexOf('drop:4');
+  assert.ok(i > 0 && seen[i - 1].startsWith('build') && seen[i + 1].startsWith('break'), seen.join(' '));
+});
+
+test('a new song fades the previous one out; pause still stops at once', () => {
+  const q = rig(), stops = [];
+  q.AK.MSynth.stop = (...a) => stops.push(a);
+  q.render(5); q.M.newSong(3);
+  assert.equal(stops.length, 1); assert.ok(stops[0][0] >= 0.05, 'fade time constant');
+  q.AK.A.playing = false; q.tick();
+  assert.equal(stops.length, 2); assert.ok(!(stops[1][0] > 0.01));
+});
+
+test('answer phrases vary the theme, and every statement opens with the theme bar', () => {
+  const { AK } = rig(), G = AK.MGen;
+  let differ = 0, heads = 0;
+  for (let seed = 0; seed < 60; seed++) {
+    const r = AK.U.rng(seed), theme = G.motif(r, 0.6), chords = [0, 3, 4, 0].map(deg => ({ deg, ext: 'triad' }));
+    const opts = { lo: 0, hi: 10, density: 0.6 }, sig = b => JSON.stringify(b.map(n => [n.s, n.deg]));
+    const statement = G.phrase(r, chords, theme, opts), answer = G.phrase(r, chords, theme, { ...opts, vary: true });
+    if (answer.map(sig).join() !== statement.map(sig).join()) differ++;
+    const varied = G.phrase(r, chords, G.varyMotif(r, theme, 'tail'), { ...opts, head: theme });
+    if (sig(varied[0]) === sig(statement[0])) heads++;
+  }
+  assert.ok(differ >= 54, `answers differ from the statement: ${differ}/60`);
+  assert.equal(heads, 60);
 });
 
 test('high game intensity audibly adds rhythmic activity and brings the build forward', () => {
