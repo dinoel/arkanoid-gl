@@ -1,14 +1,17 @@
 'use strict';
 // Отрисовка сцены: сцена для глобального освещения (что светит и что заслоняет), сетка поля тяготения,
 // тени, кирпичи с фаской и освещением, трещины, обломки, ракетка, мячи со следом и маркерами вращения,
-// бонусы, лазеры, частицы, ударные волны, рамка поля, прожекторы с цветомузыкой, магнит ракетки.
+// бонусы, лазеры, частицы, ударные волны, рамка поля, прожекторы с цветомузыкой, магнит ракетки, снаряды
+// боссов (сами боссы — кирпичи, а их глаза, усы и перепонки рисует boss.js).
 (function (AK) {
   const { R, U, P } = AK;
+  const Wt = AK.Water;
   const { clamp } = U;
   const LX = -0.45, LY = -0.89; // направление на источник света (вверх-влево)
   const tmpO = new Float32Array(128), tmpI = new Float32Array(128), tmpS = new Float32Array(128);
   const cap = new Float32Array(52);
 
+  const hash = n => { const s = Math.sin(n * 127.1 + 311.7) * 43758.5453; return s - Math.floor(s); };
   function capsule(x, y, hw, r, out) {
     let i = 0;
     const seg = 12;
@@ -21,6 +24,7 @@
     return n * 2 === out.length ? out : out.subarray(0, n * 2);
   }
   function appear(g, k) {
+    if (k.boss) return k.show; // босс собирается сам (boss.js)
     const t0 = ((k.y - 100) / 460) * 0.55 + Math.abs(k.x - 360) / 360 * 0.15;
     return U.smooth(clamp((g.levelTime - t0) / 0.35, 0, 1));
   }
@@ -29,7 +33,7 @@
   // Сетка прогибается к массам: узел смещён по направлению поля тем сильнее, чем поле больше
   // (с насыщением), а линии ярче там, где поле сильное, — так видны гравитационные колодцы.
   const GS = 32;
-  let gx = null, gy = null, gi = null, gcols = 0, grows = 0;
+  let gx = null, gy = null, gi = null, gw = null, gcols = 0, grows = 0;
   const fv = [0, 0];
   function gravityGrid(g) {
     const k = g.gview * (R.gi ? 0.65 : 1); // на освещённом полу сетка скромнее
@@ -38,6 +42,7 @@
     if (cols !== gcols || rows !== grows) {
       gcols = cols; grows = rows;
       gx = new Float32Array(cols * rows); gy = new Float32Array(cols * rows); gi = new Float32Array(cols * rows);
+      gw = new Float32Array(cols * rows);
     }
     for (let r = 0, i = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++, i++) {
@@ -47,18 +52,19 @@
         const d = a > 0 ? (13 * k) / (a + 500) : 0; // смещение 13·a/(a+500) px вдоль поля
         gx[i] = x + fv[0] * d; gy[i] = y + fv[1] * d;
         gi[i] = k * Math.min(1, a / 1100);
+        gw[i] = Wt.on ? clamp(1 - Wt.depth(x, y) / 40, 0.12, 1) : 1; // под водой сетка тонет
       }
     }
     const c = g.lv.c2;
     for (let r = 0, i = 0; r < rows; r++) {
       for (let cc = 0; cc < cols; cc++, i++) {
         if (cc + 1 < cols) {
-          R.color(c[0], c[1], c[2], 0.03 * k + 0.2 * (gi[i] + gi[i + 1]), 1);
+          R.color(c[0], c[1], c[2], (0.03 * k + 0.2 * (gi[i] + gi[i + 1])) * Math.min(gw[i], gw[i + 1]), 1);
           R.line(gx[i], gy[i], gx[i + 1], gy[i + 1], 1);
         }
         if (r + 1 < rows) {
           const j = i + cols;
-          R.color(c[0], c[1], c[2], 0.03 * k + 0.2 * (gi[i] + gi[j]), 1);
+          R.color(c[0], c[1], c[2], (0.03 * k + 0.2 * (gi[i] + gi[j])) * Math.min(gw[i], gw[j]), 1);
           R.line(gx[i], gy[i], gx[j], gy[j], 1);
         }
       }
@@ -89,6 +95,7 @@
   // На плоскости свет от точки спадает как 1/r, поэтому маленький мяч должен быть очень ярким.
   const E_BALL = 26, E_FIRE = 30, E_PADDLE = 1.6, E_CAP = 3, E_LASER = 6, E_SPARK = 3, E_EDGE = 0.6, E_HIT = 2;
   const E_SPOT = 60; // прожекторы на стенах
+  const E_SHOT = 4;  // снаряды босса
   const SELF = { normal: 0.25, strong: 0.14, explosive: 0, steel: 0 }; // собственное свечение кирпичей
   const SKY = [0.05, 0.055, 0.075];   // свет, приходящий из-за края экрана (снизу, из-под ракетки)
   const LIT_BRICK = 0.8;             // кирпич на 80% освещается и на 20% светится сам — всегда различим
@@ -129,13 +136,15 @@
       R.poly(capsule(u.x, u.y + Math.sin(u.t * 6) * 1.5, 9, 9.5, cap));
     }
     // ракетка светится цветом уровня (под магнитом — ярче), торцы — красным
-    const p = g.paddle, pe = E_PADDLE * (1 + p.flash * 1.5 + g.magnet * 1.5);
+    const p = g.paddle, pe = E_PADDLE * (1 + p.flash * 1.5 + g.magnet * 1.5) * (p.stone > 0 ? 0.1 : 1); // камень не светится
     R.color(c2[0] * pe, c2[1] * pe, c2[2] * pe, 1);
     R.poly(capsule(p.x, p.y, p.hw, p.r, cap));
-    const ce = E_CAP * (0.45 + 0.15 * Math.sin(t * 5) + p.flash * 0.5);
+    const ce = E_CAP * (0.45 + 0.15 * Math.sin(t * 5) + p.flash * 0.5) * (p.stone > 0 ? 0.1 : 1);
     R.color(ce, ce * 0.28, ce * 0.35, 1);
     R.disc(p.x - p.hw, p.y, p.r); R.disc(p.x + p.hw, p.y, p.r);
     for (const z of g.lasers) { R.color(E_LASER, E_LASER * 0.4, E_LASER * 0.4, 1); R.line(z.x, z.y, z.x, z.y + 18, 4); }
+    if (g.boss) g.boss.gi(t);
+    for (const s of g.shots) { const c = s.col, e = E_SHOT; R.color(c[0] * e, c[1] * e, c[2] * e, 1); R.disc(s.x, s.y, s.r * 0.8); }
     // искры светят; пламя и дымки — нет: они непрозрачны для лучей, и огненный мяч, окутанный ими,
     // мерцал бы, загораживая сам себя
     for (const q of g.particles) {
@@ -180,6 +189,7 @@
       s.col[0] = q.c[0] * e; s.col[1] = q.c[1] * e; s.col[2] = q.c[2] * e;
     });
     lights.length = g.spots.length;
+    if (g.boss && g.boss.lights) for (const s of g.boss.lights()) lights.push(s); // взгляд Горгоны
     return lights;
   }
   // дымка луча — на полу, под кирпичами; при глобальном освещении конус и так виден по полу, дымка слабее
@@ -225,7 +235,7 @@
       R.poly(tmpS.subarray(0, n * 2));
     }
     const p = g.paddle;
-    R.poly(capsule(p.x + 7, p.y + 9, p.hw, p.r, cap));
+    if (!hullInWater(g)) R.poly(capsule(p.x + 7, p.y + 9, p.hw, p.r, cap)); // на воде тень рисует FS_BG
     R.color(0, 0, 0, 0.35);
     for (const b of g.balls) R.soft(b.x + 6, b.y + 8, b.r * 1.7);
     for (const u of g.powerups) R.soft(u.x + 6, u.y + 8, 20);
@@ -326,7 +336,7 @@
       const [r, gg, b] = d.color;
       // летящий осколок чуть светится — его можно поймать
       R.lit(0);
-      if (d.rest < 0.3) { R.color(r, gg, b, (0.16 + 0.07 * Math.sin(d.age * 9 + d.x)) * a, 1); R.soft(d.x, d.y, d.r * 3.2); }
+      if (d.rest < 0.3) { R.color(r, gg, b, (0.16 + 0.07 * Math.sin(d.age * 9 + d.x)) * a * (d.inW ? 0.45 : 1), 1); R.soft(d.x, d.y, d.r * 3.2); }
       R.lit(R.gi ? 0.9 : 0, 0, 0, 1);
       R.color(r * 0.8, gg * 0.8, b * 0.8, a);
       R.poly(w);
@@ -340,6 +350,68 @@
         if (R.gi) R.lit(0.9, nx * 3, ny * 3, 1);
         R.color(Math.min(1, r * sh), Math.min(1, gg * sh), Math.min(1, b * sh), a);
         R.line(w[i * 2], w[i * 2 + 1], w[j * 2], w[j * 2 + 1], 1.6);
+      }
+      if (d.inW) underWater(d.x, d.y, 70, a, () => R.poly(w));
+    }
+    R.lit(0);
+  }
+
+  // ---------- Вода ----------
+  // Предмет в воде виден сквозь неё: сверху ложится плёнка цвета толщи, тем гуще, чем глубже.
+  // span — на какой глубине (px ниже кромки) плёнка густеет до предела, shape — рисует очертание.
+  const FILM = [0.03, 0.13, 0.16];
+  function underWater(x, y, span, a, shape) {
+    const k = clamp(Wt.depth(x, y) / span, 0, 0.7) * a;
+    if (k <= 0) return;
+    R.lit(R.gi ? 0.6 : 0);
+    R.color(FILM[0], FILM[1], FILM[2], k);
+    shape();
+    R.lit(0);
+  }
+  // Капли, упавшие на пол, — бусины с бликом сверху-слева; под всем остальным, высыхают
+  function wetSpots() {
+    for (const p of Wt.spots) {
+      const a = p.t < 2.5 ? 1 : 1 - (p.t - 2.5) / 1.5;
+      R.color(0, 0.01, 0.015, 0.35 * a); R.soft(p.x, p.y, p.r * 1.6);
+      R.color(0.55, 0.8, 1, 0.22 * a, 1); R.disc(p.x - p.r * 0.3, p.y - p.r * 0.35, p.r * 0.38);
+    }
+  }
+  // Капли над полом: z — высота, рисуем выше на экране и с тенью на полу
+  function droplets() {
+    for (const d of Wt.drops) {
+      if (d.z > 3) { R.color(0, 0, 0, 0.22); R.disc(d.x + d.z * 0.12, d.y + d.z * 0.16, d.r * 0.9); }
+    }
+    for (const d of Wt.drops) {
+      R.color(0.62, 0.85, 1, 0.75, 1); R.disc(d.x, d.y - d.z * 0.5, d.r);
+      R.color(0.5, 0.75, 1, 0.12, 1); R.soft(d.x, d.y - d.z * 0.5, d.r * 3);
+    }
+  }
+  // Ракетка на воде, как лодка: ниже ватерлинии корпус виден сквозь толщу. Плёнка начинается с нуля и густеет
+  // с глубиной, так что самой линии воды на корпусе не видно. У борта вода взбирается на него на MEN px (мениск;
+  // на ходу у носа выше, у кормы ниже — так же изгибается и кромка в FS_BG).
+  const MEN = 2.5;
+  const hullV = p => clamp(p.vx / 800, -1.5, 1.5);
+  const waterline = (p, x, v) => Wt.shoreAt(x) - MEN * Math.max(1 + clamp((x - p.x) / (p.hw + p.r), -1, 1) * v, 0.2);
+  const hullHalf = (p, x) => { const a = Math.abs(x - p.x) - p.hw; return a <= 0 ? p.r : Math.sqrt(Math.max(0, p.r * p.r - a * a)); };
+  const filmA = dz => 0.5 * (1 - Math.exp(-Math.max(dz, 0) / 8));
+  function hullInWater(g) {
+    const p = g.paddle;
+    return Wt.on && p.y + p.r > Wt.shoreAt(p.x) - MEN ? [p.x, p.y, p.hw, p.r, MEN, hullV(p)] : null;
+  }
+  function paddleWater(g) {
+    const p = g.paddle, v = hullV(p), ext = p.hw + p.r, N = 2;
+    if (waterline(p, p.x, v) > p.y + p.r) return;
+    R.lit(R.gi ? 0.6 : 0);
+    for (let x = p.x - ext; x < p.x + ext - 0.01; x += N) {
+      const xa = x, xb = Math.min(x + N, p.x + ext), xm = (xa + xb) / 2;
+      const ha = hullHalf(p, xa), hb = hullHalf(p, xb), hm = hullHalf(p, xm);
+      const ya = waterline(p, xa, v), yb = waterline(p, xb, v), ym = (ya + yb) / 2;
+      // под водой: от ватерлинии до днища
+      const ba = p.y + ha, bb = p.y + hb, ta = Math.min(Math.max(ya, p.y - ha), ba), tb = Math.min(Math.max(yb, p.y - hb), bb);
+      if (ta < ba || tb < bb) {
+        R.color(FILM[0], FILM[1], FILM[2], filmA(Math.max(ym, p.y - hm) - ym));
+        R.color2(FILM[0], FILM[1], FILM[2], filmA(p.y + hm - ym));
+        R.quadG(xa, ta, xb, tb, xb, bb, xa, ba);
       }
     }
     R.lit(0);
@@ -377,7 +449,7 @@
   }
   // Надпись всплывает над ракеткой и держится, пока идут поимки; с серией цифры крупнее
   function popups(g) {
-    const y0 = g.PADDLE_Y - g.paddle.r - 20;
+    const y0 = g.paddle.y - g.paddle.r - 20;
     for (const q of g.popups) {
       const a = q.t < 0.7 ? 1 : Math.max(0, 1 - (q.t - 0.7) / 0.4);
       const y = y0 - 48 * (1 - Math.exp(-q.age * 3));
@@ -446,6 +518,67 @@
         R.color(1, 0.35, 0.35, 0.9, 1); R.rect(ex - 1.5, p.y - p.r - 8, 3, 3);
       }
     }
+    // окаменевшая взглядом Горгоны: серый камень поверх корпуса, крапины, а к концу — трещины; пока взгляд
+    // только держится на ней, камень наползает полупрозрачно
+    const stoneA = p.stone > 0 ? Math.min(1, (p.stone0 - p.stone) / 0.15) : 0.75 * Math.min(1, p.stare / p.stareMax);
+    if (stoneA > 0) {
+      const a = stoneA, end = p.stone > 0 ? 1 - Math.min(1, p.stone / 0.7) : 0;
+      R.lit(gi ? 0.85 : 0);
+      R.color(0.46, 0.45, 0.43, a); R.color2(0.8, 0.79, 0.75, a);
+      R.polyShade(capsule(p.x, p.y, p.hw, p.r + 0.6, cap), p.x, p.y - p.r * 0.35, LX, LY, 0.35);
+      R.lit(0);
+      for (let i = 0; i < 18; i++) {
+        R.color(0.18, 0.18, 0.17, 0.55 * a);
+        R.disc(p.x + (hash(i * 1.7) * 2 - 1) * (p.hw + p.r * 0.4), p.y + (hash(i * 3.1 + 5) * 2 - 1) * p.r * 0.6, 0.8 + hash(i + 0.5) * 1.2);
+      }
+      for (let i = 0; i < 4 && end > 0; i++) {
+        let x = p.x + (hash(i + 9) * 2 - 1) * p.hw, y = p.y - p.r;
+        R.color(0.06, 0.06, 0.06, a);
+        for (let j = 0; j < Math.ceil(4 * end); j++) { const nx = x + (hash(i * 7 + j) * 2 - 1) * 5, ny = y + 5.5; R.line(x, y, nx, ny, 1.2); x = nx; y = ny; }
+      }
+    }
+    // оглушённая снарядом босса: голубой отсвет и треск разрядов вдоль корпуса
+    if (p.stun > 0) {
+      const a = Math.min(1, p.stun / 0.4);
+      R.lit(0);
+      R.color(0.5, 0.8, 1, 0.3 * a, 1); R.poly(capsule(p.x, p.y, p.hw, p.r, cap));
+      for (let i = 0; i < 3; i++) {
+        let x = p.x + (Math.random() * 2 - 1) * p.hw, y = p.y + (Math.random() * 2 - 1) * p.r;
+        const dir = Math.random() < 0.5 ? -1 : 1;
+        for (let j = 0; j < 5; j++) {
+          const nx = x + dir * (6 + Math.random() * 10), ny = clamp(p.y + (Math.random() * 2 - 1) * (p.r + 7), p.y - p.r - 8, p.y + p.r + 8);
+          R.color(0.5, 0.8, 1, 0.3 * a, 1); R.line(x, y, nx, ny, 4);
+          R.color(0.85, 0.95, 1, a, 1); R.line(x, y, nx, ny, 1.3);
+          x = nx; y = ny;
+        }
+      }
+    }
+  }
+
+  // ---------- Снаряды босса ----------
+  // Огонь змея — раскалённый шар (шлейф пламени — частицы из game.js), споры медузы пульсируют кольцом,
+  // разряды ската — короткие вытянутые молнии
+  function shots(g, t) {
+    R.lit(0);
+    for (const s of g.shots) {
+      const c = s.col;
+      if (s.kind === 'fire') {
+        const fl = 0.85 + 0.15 * Math.sin(t * 31 + s.x);
+        R.color(1, 0.45, 0.1, 0.55, 1); R.soft(s.x, s.y, s.r * 3.4 * fl);
+        R.color(1, 0.72, 0.3, 1, 1); R.disc(s.x, s.y, s.r * 0.9);
+        R.color(1, 1, 0.85, 1, 1); R.disc(s.x, s.y, s.r * 0.45);
+      } else if (s.kind === 'spore') {
+        const pu = 0.5 + 0.5 * Math.sin(s.t * 9);
+        R.color(c[0], c[1], c[2], 0.4, 1); R.soft(s.x, s.y, s.r * (3 + pu));
+        R.color(c[0], c[1], c[2], 0.9, 1); R.ring(s.x, s.y, s.r * (1.15 + 0.25 * pu), 0.28);
+        R.color(0.5 + c[0] * 0.5, 0.5 + c[1] * 0.5, 0.5 + c[2] * 0.5, 1, 1); R.disc(s.x, s.y, s.r * 0.5);
+      } else {
+        const sp = Math.hypot(s.vx, s.vy) || 1, dx = s.vx / sp, dy = s.vy / sp;
+        R.color(c[0], c[1], c[2], 0.5, 1); R.soft(s.x, s.y, s.r * 3);
+        R.color(c[0], c[1], c[2], 0.85, 1); R.line(s.x - dx * 26, s.y - dy * 26, s.x, s.y, s.r * 1.2);
+        R.color(1, 1, 1, 1, 1); R.line(s.x - dx * 18, s.y - dy * 18, s.x + dx * 2, s.y + dy * 2, 2);
+      }
+    }
   }
 
   // ---------- Мячи ----------
@@ -468,6 +601,7 @@
         R.color(0.08, 0.15, 0.35, 0.55);
         R.disc(b.x + Math.cos(a) * b.r * 0.55, b.y + Math.sin(a) * b.r * 0.55, b.r * 0.2);
       }
+      if (b.inW) underWater(b.x, b.y, 90, 1, () => R.disc(b.x, b.y, b.r));
       if (b.stuck && !g.demo) {
         const p = g.paddle;
         const a = -Math.PI / 2 + clamp(p.vx * 0.0006, -0.45, 0.45) + clamp(b.off / (p.hw + p.r), -1, 1) * 0.35;
@@ -505,6 +639,7 @@
       R.polyShade(capsule(u.x, y, 9, 7.8, cap), u.x, y - 2, LX, LY, 0.4);
       R.lit(0);
       icon(u.type, u.x, y);
+      if (u.inW) underWater(u.x, y, 80, 1, () => R.poly(capsule(u.x, y, 9, 9.5, cap)));
     }
   }
 
@@ -524,6 +659,11 @@
       } else if (p.type === 1) {
         R.color(c[0], c[1], c[2], 0.5 * a, 1);
         R.soft(p.x, p.y, p.size * (1.4 - 0.4 * a));
+      } else if (p.type === 3) { // каменная крошка
+        R.lit(R.gi ? 1 : 0);
+        R.color(c[0], c[1], c[2], Math.min(1, a * 2));
+        R.disc(p.x, p.y, p.size);
+        R.lit(0);
       } else {
         R.lit(R.gi ? 1 : 0);
         R.color(c[0], c[1], c[2], 0.4 * a);
@@ -570,19 +710,26 @@
       AK.Show.update(g, t);
       if (R.beginGI(sx, sy)) { giScene(g, t); R.endGI(SKY); }
       R.topLights(R.gi ? spotLights(g) : []);
+      R.water(Wt.on ? Wt.frame() : null, spotLights(g), hullInWater(g));
       R.begin(t, sx, sy, g.lv.c1, g.lv.c2);
+      if (Wt.on) wetSpots();
       gravityGrid(g);
       spotBeams(g);
       if (!R.gi) shadows(g); // при глобальном освещении тени настоящие
       lureRings(g, t);
+      if (g.boss) g.boss.under(t);
       for (const k of g.bricks) if (k.alive) brick(g, k, t);
       debris(g);
+      if (g.boss) g.boss.over(t);
       powerups(g, t);
       magnetFx(g, t);
       paddle(g, t);
+      if (Wt.on) paddleWater(g);
       balls(g, t);
+      shots(g, t);
       lasers(g);
       particles(g);
+      if (Wt.on) droplets();
       popups(g);
       frame(g, t);
       spotFixtures(g);

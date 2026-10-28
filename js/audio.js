@@ -188,6 +188,33 @@
     tone({ f: 90, f2: 28, d: 0.5, vol: 0.7, pan, glide: 0.45 });
     noise({ f: 900, f2: 200, q: 0.8, d: 0.25, vol: 0.35, pan, rate: 0.5 });
   };
+  // Всплеск: шлепок шума, гаснущий вниз, шипение брызг и пара пузырей, чья высота растёт.
+  // s — сила, 0…1: мяч влетает в воду с 0.6, осколок — слабее.
+  A.splash = (s, pan) => {
+    if (!A.ready || !gate('splash', 0.05)) return;
+    const v = clamp(s, 0.1, 1), t = ctx.currentTime;
+    noise({ f: 1500, f2: 420, q: 0.9, a: 0.004, d: 0.1 + 0.16 * v, vol: 0.24 * v, pan });
+    noise({ ft: 'highpass', f: 5200, q: 0.7, d: 0.05 + 0.1 * v, vol: 0.07 * v, pan });
+    for (let i = 0, n = 1 + Math.round(v * 2); i < n; i++) {
+      const f = 380 + Math.random() * 420;
+      tone({ t: t + 0.02 + Math.random() * 0.1, f, f2: f * (2 + Math.random()), glide: 0.05, d: 0.06, vol: 0.05 * v, pan });
+    }
+  };
+  // Вода выкипает от взрыва — шипение пара
+  A.steam = pan => {
+    if (!A.ready || !gate('steam', 0.2)) return;
+    noise({ ft: 'highpass', f: 2600, f2: 5200, q: 0.5, a: 0.08, d: 0.8, vol: 0.06, pan });
+  };
+  // Вода уходит с поля: бульканье — пузыри всё ниже и реже — и глухой шум воронки
+  A.drain = () => {
+    if (!A.ready) return;
+    const t = ctx.currentTime;
+    noise({ t, ft: 'lowpass', f: 700, f2: 160, q: 1.2, a: 0.25, d: 1.8, vol: 0.12 });
+    for (let i = 0; i < 9; i++) {
+      const at = t + 0.1 + i * 0.13 + Math.random() * 0.08, f = 320 - i * 22 + Math.random() * 60;
+      tone({ t: at, f, f2: f * 1.8, glide: 0.07, d: 0.08, vol: 0.06 * (1 - i / 12), pan: (Math.random() - 0.5) * 0.6 });
+    }
+  };
   A.power = pan => {
     if (!A.ready) return;
     const t = ctx.currentTime;
@@ -233,6 +260,88 @@
   A.laser = pan => {
     if (!A.ready || !gate('laser', 0.05)) return;
     tone({ f: 1500, f2: 260, d: 0.13, vol: 0.12, pan, type: 'square', lp: 4000, glide: 0.12 });
+  };
+  // ---- Боссы ----
+  // Рёв при рождении: две расстроенные пилы ползут вниз под гул шума
+  A.bossRoar = pan => {
+    if (!A.ready || !gate('roar', 0.5)) return;
+    tone({ f: 92, f2: 46, glide: 1.1, a: 0.08, d: 1.2, vol: 0.3, type: 'sawtooth', lp: 900, lp2: 160, pan });
+    tone({ f: 97, f2: 49, glide: 1.1, a: 0.08, d: 1.2, vol: 0.22, type: 'sawtooth', lp: 700, lp2: 140, pan });
+    noise({ ft: 'lowpass', f: 600, f2: 120, q: 0.8, a: 0.1, d: 1.2, vol: 0.24, pan, rate: 0.4 });
+  };
+  // Пике: свист, падающий сверху вниз, под нарастающий гул
+  A.bossDive = pan => {
+    if (!A.ready || !gate('dive', 1)) return;
+    noise({ f: 2400, f2: 260, q: 2.5, a: 0.5, d: 0.7, vol: 0.16, pan });
+    tone({ f: 180, f2: 70, glide: 1.1, a: 0.4, d: 0.8, vol: 0.14, type: 'sawtooth', lp: 900, lp2: 200, pan });
+  };
+  // Взгляд Горгоны: гудящий луч длиной dur — две расстроенные низкие пилы и тонкий писк
+  A.gaze = (pan, dur) => {
+    if (!A.ready || !gate('gaze', 0.5)) return;
+    tone({ f: 82, a: 0.08, d: dur, vol: 0.12, type: 'sawtooth', lp: 1400, pan });
+    tone({ f: 83.5, a: 0.08, d: dur, vol: 0.1, type: 'square', lp: 900, pan });
+    tone({ f: 2640, f2: 2200, glide: dur, a: 0.1, d: dur, vol: 0.025, pan });
+  };
+  // Ракетка каменеет: глухой удар и хруст
+  A.petrify = pan => {
+    if (!A.ready || !gate('petrify', 0.3)) return;
+    tone({ f: 90, f2: 40, glide: 0.3, d: 0.4, vol: 0.3, pan });
+    noise({ ft: 'lowpass', f: 900, f2: 200, q: 0.8, d: 0.45, vol: 0.3, pan });
+    noise({ f: 3500, q: 2, d: 0.25, vol: 0.08, pan, rate: 0.5 });
+  };
+  // Камень осыпается: дробь мелких щелчков
+  A.crumble = pan => {
+    if (!A.ready || !gate('crumble', 0.3)) return;
+    const t = ctx.currentTime;
+    for (let i = 0; i < 9; i++) noise({ t: t + i * 0.035 + Math.random() * 0.02, f: 1800 + Math.random() * 2500, q: 3, d: 0.04, vol: 0.09, pan });
+    noise({ ft: 'lowpass', f: 600, d: 0.3, vol: 0.12, pan });
+  };
+  // Заряд перед выстрелом: нарастающий свист длиной dur
+  A.bossCharge = (pan, dur) => {
+    if (!A.ready || !gate('charge', 0.2)) return;
+    tone({ f: 220, f2: 880, glide: dur, a: dur * 0.85, d: 0.12, vol: 0.06, type: 'triangle', pan });
+    noise({ f: 800, f2: 4000, q: 4, a: dur * 0.9, d: 0.08, vol: 0.04, pan });
+  };
+  // Выстрел: огонь — выдох с гулом, споры — бульканье вверх, разряд — визг молнии
+  A.bossShot = (kind, pan) => {
+    if (!A.ready || !gate('bshot', 0.04)) return;
+    const t = ctx.currentTime;
+    if (kind === 'fire') {
+      noise({ ft: 'lowpass', f: 1800, f2: 300, q: 0.7, a: 0.01, d: 0.35, vol: 0.3, pan });
+      tone({ f: 140, f2: 60, d: 0.25, vol: 0.22, pan });
+    } else if (kind === 'spore') {
+      for (let i = 0; i < 3; i++) { const f = 480 + i * 170; tone({ t: t + i * 0.05, f, f2: f * 1.6, glide: 0.06, d: 0.09, vol: 0.06, pan }); }
+    } else {
+      tone({ f: 1900, f2: 300, glide: 0.18, d: 0.2, vol: 0.08, type: 'sawtooth', lp: 3500, pan });
+      noise({ f: 3000, q: 1, d: 0.05, vol: 0.08, pan });
+    }
+  };
+  // Снаряд попал в ракетку: электрический треск
+  A.zap = pan => {
+    if (!A.ready || !gate('zap', 0.1)) return;
+    tone({ f: 110, d: 0.45, vol: 0.13, type: 'square', lp: 2500, lp2: 400, pan });
+    tone({ f: 117, d: 0.45, vol: 0.1, type: 'sawtooth', lp: 2000, lp2: 300, pan });
+    noise({ f: 4200, q: 0.8, d: 0.35, vol: 0.12, pan });
+  };
+  // Снаряд сбит мячом или лазером
+  A.pop = pan => {
+    if (!A.ready || !gate('pop', 0.03)) return;
+    tone({ f: 900, f2: 1800, glide: 0.05, d: 0.08, vol: 0.09, pan, type: 'triangle' });
+    noise({ f: 6000, q: 1, d: 0.03, vol: 0.06, pan, ft: 'highpass' });
+  };
+  // Удар в сердце босса: металлический звон и стон
+  A.bossHurt = pan => {
+    if (!A.ready || !gate('bhurt', 0.08)) return;
+    metal(330, 0.13, pan, 0.9);
+    tone({ f: 150, f2: 95, glide: 0.4, d: 0.5, vol: 0.17, type: 'sawtooth', lp: 700, pan });
+  };
+  // Босс повержен: взрыв, долгий гаснущий рёв и рассыпающиеся колокольчики
+  A.bossDie = () => {
+    if (!A.ready) return;
+    const t = ctx.currentTime;
+    noise({ t, ft: 'lowpass', f: 3000, f2: 60, q: 0.6, a: 0.005, d: 1.6, vol: 0.9 });
+    tone({ t, f: 120, f2: 30, glide: 1.6, d: 1.8, vol: 0.45, type: 'sawtooth', lp: 1200, lp2: 120 });
+    for (let i = 0; i < 10; i++) bell(A.note(2 + ((i * 3) % 12)), 0.11, (Math.random() - 0.5) * 1.4, 1.2, 2.0, 1.6, t + 0.25 + i * 0.11);
   };
   A.launch = pan => {
     if (!A.ready) return;

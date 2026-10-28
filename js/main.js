@@ -8,6 +8,7 @@
 
   const params = new URLSearchParams(location.search);
   let urlSeed = parseInt(params.get('seed'), 10);
+  let urlLevel = parseInt(params.get('level'), 10); // ?level=4 — начать с этого уровня (например, с босса)
   const randomSeed = () => 1 + Math.floor(Math.random() * 99999);
 
   let bannerTimer = 0;
@@ -46,7 +47,8 @@
       let alive = 0, total = 0;
       for (const k of G.bricks) if (k.kind !== 'steel') { total++; if (k.alive) alive++; }
       const x = 0.2 + 0.12 * Math.min(G.balls.length - 1, 4) + Math.min(G.combo, 12) * 0.035
-        + (G.pw.fire > 0 ? 0.15 : 0) + (G.pw.laser > 0 ? 0.08 : 0) + 0.3 * (1 - alive / Math.max(1, total));
+        + (G.pw.fire > 0 ? 0.15 : 0) + (G.pw.laser > 0 ? 0.08 : 0) + 0.3 * (1 - alive / Math.max(1, total))
+        + (G.boss ? 0.25 + 0.2 * G.boss.dive : 0);
       AK.Music.setIntensity(x);
     },
   };
@@ -69,8 +71,9 @@
     A.init();
     A.playing = true;
     const seed = Number.isFinite(urlSeed) ? urlSeed : randomSeed();
-    urlSeed = NaN;
-    G.newGame(seed, false);
+    const level = Number.isFinite(urlLevel) ? urlLevel : 1;
+    urlSeed = urlLevel = NaN;
+    G.newGame(seed, false, level);
     playing = true;
     overlay.classList.add('hidden');
     A.start();
@@ -136,6 +139,11 @@
         const on = R.toggleGI();
         if (!R.giAvailable) AK.UI.banner('СВЕТ', 'глобальное освещение не поддерживается этим браузером', 1.6);
         else AK.UI.banner(on ? 'ГЛОБАЛЬНОЕ ОСВЕЩЕНИЕ' : 'ПРОСТОЕ ОСВЕЩЕНИЕ', on ? 'мягкие тени, свет от всего, что светится' : 'как раньше', 1.4);
+        break;
+      }
+      case 'KeyW': {
+        const on = AK.Water.toggle();
+        AK.UI.banner(on ? 'ВОДА ВКЛ' : 'ВОДА ВЫКЛ', on ? 'ракетка плавает; упавшие осколки поднимают воду, пойманные — убавляют' : '', 1.6);
         break;
       }
       case 'KeyN': if (playing && !G.demo && !G.paused) G.skipLevel(); break;

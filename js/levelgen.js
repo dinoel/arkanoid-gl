@@ -300,6 +300,10 @@
     generate(level, baseSeed, prevGen) {
       const seedInt = U.seedFrom(baseSeed, level);
       const rng = U.rng(seedInt);
+      if (AK.Boss && AK.Boss.isLevel(level)) {
+        const boss = AK.Boss.create(level, rng);
+        return { bricks: boss.specs, gen: 'boss', seedInt, title: 'Босс', name: boss.name, c1: boss.c1, c2: boss.c2, rng, boss };
+      }
       const d = level - 1;
       const hue = rng();
       const spread = rng.range(0.15, 0.45) * (rng.chance(0.5) ? 1 : -1);
