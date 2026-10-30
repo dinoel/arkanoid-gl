@@ -1,6 +1,6 @@
 'use strict';
-// Настройки для экспериментов: панель с ползунками (клавиша O). Значения лежат в AK.S, отрисовка читает их
-// каждый кадр, так что всё меняется на лету; выбор запоминается в браузере.
+// Настройки для экспериментов: панель с ползунками и качеством картинки (клавиша O). Значения лежат в AK.S,
+// отрисовка читает их каждый кадр, так что всё меняется на лету; выбор запоминается в браузере.
 (function (AK) {
   const { clamp } = AK.U;
   const KEY = 'arkanoid-gl.settings';
@@ -17,6 +17,16 @@
     const v = saved[d.id];
     S[d.id] = typeof v === 'number' && isFinite(v) ? clamp(v, d.min || 0, d.max) : d.def;
   }
+  // Качество: свет (gi.js) и разрешение рисунка — пикселей на точку экрана с масштабом (main.js). При «авто» main.js
+  // сам снижает их, если видеокарта не успевает, и сообщает сюда (sync), на чём остановился; выбор вручную
+  // выключает авто
+  const GI_Q = [['high', 'высокое'], ['medium', 'среднее'], ['low', 'низкое']];
+  const RES = [[2, '×2'], [1.5, '×1.5'], [1, '×1']];
+  const QDEF = { qAuto: true, giQ: 'high', res: 2 };
+  S.qAuto = saved.qAuto !== false;
+  S.giQ = GI_Q.some(q => q[0] === saved.giQ) ? saved.giQ : QDEF.giQ;
+  S.res = RES.some(r => r[0] === saved.res) ? saved.res : QDEF.res;
+  const cur = { giQ: S.giQ, res: S.res }; // что стоит на самом деле
   function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* без хранилища — до перезагрузки */ } }
 
   // ---- Панель ----
@@ -37,13 +47,43 @@
     show();
     return show;
   });
+  const qual = document.createElement('div');
+  qual.className = 'qual';
+  const seg = (k, label, list) => `<div class="seg" data-k="${k}"><span>${label}</span>` +
+    list.map(([v, t]) => `<button type="button" data-v="${v}">${t}</button>`).join('') + '</div>';
+  qual.innerHTML = '<label class="chk"><input type="checkbox"><span>качество — авто</span></label>' +
+    '<small>само снижает, если видеокарта не успевает</small>' +
+    seg('giQ', 'свет', GI_Q) + seg('res', 'разрешение', RES) +
+    '<small>разрешение — пикселей на точку, на экранах с масштабом; свет — при глобальном освещении (L)</small>';
+  const chk = qual.querySelector('input');
+  function showQ() {
+    chk.checked = S.qAuto;
+    qual.classList.toggle('auto', S.qAuto);
+    for (const b of qual.querySelectorAll('button')) {
+      const k = b.parentNode.dataset.k;
+      b.classList.toggle('on', String(S.qAuto ? cur[k] : S[k]) === b.dataset.v);
+    }
+  }
+  const setQ = () => { save(); showQ(); if (AK.Settings.onQuality) AK.Settings.onQuality(); };
+  chk.addEventListener('change', () => { S.qAuto = chk.checked; setQ(); chk.blur(); });
+  qual.addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    const k = b.parentNode.dataset.k;
+    S.qAuto = false; S[k] = k === 'res' ? +b.dataset.v : b.dataset.v;
+    setQ(); b.blur();
+  });
+  panel.appendChild(qual);
+  showQ();
+
   const foot = document.createElement('div');
   foot.className = 'foot';
   foot.innerHTML = '<button type="button">по умолчанию</button><span><kbd>O</kbd> закрыть</span>';
   foot.querySelector('button').addEventListener('click', e => {
     for (const d of DEFS) S[d.id] = d.def;
+    Object.assign(S, QDEF);
     rows.forEach(f => f());
-    save();
+    setQ();
     e.currentTarget.blur();
   });
   panel.appendChild(foot);
@@ -53,5 +93,7 @@
   AK.Settings = {
     get open() { return !panel.classList.contains('hidden'); },
     toggle(on = !this.open) { panel.classList.toggle('hidden', !on); return on; },
+    onQuality: null, // main.js: применить качество из S
+    sync(giQ, res) { cur.giQ = giQ; cur.res = res; showQ(); }, // что стоит на самом деле
   };
 })(window.AK);

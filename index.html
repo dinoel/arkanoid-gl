@@ -32,6 +32,10 @@
     position: absolute; right: 3%; bottom: 1.2%; font-size: .62em; letter-spacing: .12em;
     pointer-events: none; opacity: .4; text-transform: uppercase;
   }
+  #fps {
+    position: absolute; left: 3%; top: 6.2%; font-size: .6em; line-height: 1.5; letter-spacing: .06em;
+    pointer-events: none; opacity: .65; white-space: pre; font-variant-numeric: tabular-nums;
+  }
   #banner {
     position: absolute; left: 0; right: 0; top: 62%; text-align: center; pointer-events: none;
     opacity: 0; transition: opacity .5s;
@@ -79,6 +83,15 @@
     font: inherit; color: inherit; background: rgba(255,255,255,.08); cursor: pointer;
     border: 1px solid rgba(255,255,255,.25); border-radius: .4em; padding: .2em .7em;
   }
+  #settings .qual { margin: .1em 0 .8em; padding-top: .7em; border-top: 1px solid rgba(255,255,255,.1); }
+  #settings .chk { display: flex; align-items: center; gap: .5em; cursor: pointer; }
+  #settings .chk input { margin: 0; accent-color: #7fb6ff; cursor: pointer; }
+  #settings .qual small { display: block; opacity: .45; font-size: .82em; margin: .25em 0 .6em; }
+  #settings .seg { display: flex; align-items: center; gap: .3em; margin-bottom: .4em; }
+  #settings .seg span { flex: 1; opacity: .85; }
+  #settings .seg button { padding: .15em .35em; }
+  #settings .seg button.on { background: rgba(127,182,255,.32); border-color: #7fb6ff; color: #fff; }
+  #settings .qual.auto .seg button { opacity: .55; }
   #settings kbd { padding: 0 .45em; border: 1px solid rgba(255,255,255,.35); border-radius: .3em; font-family: inherit; }
   #err { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
     padding: 2em; text-align: center; font-size: 1.2em; }
@@ -95,6 +108,7 @@
   </div>
   <div id="powers"></div>
   <div id="music"></div>
+  <div id="fps"></div>
   <div id="banner"><h2 id="bannerTitle"></h2><p id="bannerSub"></p></div>
   <div id="overlay">
     <h1>ARKANOID</h1>
@@ -110,7 +124,7 @@
       ракетка плавает: упавшие осколки поднимают воду и её вместе с ней; пойманные осколки и взрывы воду убавляют<br>
       каждый четвёртый уровень — босс из кирпичей: разбей ему глаз; он стреляет и пикирует к ракетке, выстрелы оглушают её, мяч их сбивает; от взгляда Горгоны уходи — окаменеешь<br>
       <kbd>P</kbd> пауза &nbsp;·&nbsp; <kbd>M</kbd> музыка &nbsp;·&nbsp; <kbd>G</kbd> гравитация &nbsp;·&nbsp; <kbd>L</kbd> свет &nbsp;·&nbsp; <kbd>W</kbd> вода &nbsp;·&nbsp;
-      <kbd>N</kbd> пропустить уровень &nbsp;·&nbsp; <kbd>R</kbd> новая игра (новый сид) &nbsp;·&nbsp; <kbd>O</kbd> настройки<br>
+      <kbd>N</kbd> пропустить уровень &nbsp;·&nbsp; <kbd>R</kbd> новая игра (новый сид) &nbsp;·&nbsp; <kbd>O</kbd> настройки &nbsp;·&nbsp; <kbd>F</kbd> счётчик кадров<br>
       сид из адреса: <kbd>?seed=12345</kbd>, уровень: <kbd>?level=4</kbd>
     </div>
   </div>

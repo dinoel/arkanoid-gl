@@ -4,7 +4,7 @@
   const { R, A, G } = AK;
   const $ = id => document.getElementById(id);
   const wrap = $('wrap'), canvas = $('gl'), overlay = $('overlay'), banner = $('banner');
-  const el = { score: $('score'), level: $('level'), lives: $('lives'), combo: $('combo'), powers: $('powers'), music: $('music') };
+  const el = { score: $('score'), level: $('level'), lives: $('lives'), combo: $('combo'), powers: $('powers'), music: $('music'), fps: $('fps') };
 
   const params = new URLSearchParams(location.search);
   let urlSeed = parseInt(params.get('seed'), 10);
@@ -13,6 +13,7 @@
 
   let bannerTimer = 0;
   const last = {};
+  const fps = { on: true, n: 0, t: 0, worst: 0, upd: 0, draw: 0, gpu: 0, gi: 0 }; // счётчик кадров (F), см. meter()
   const POWER_LABELS = { expand: 'ШИРЕ', slow: 'МЕДЛЕННО', laser: 'ЛАЗЕР', fire: 'ОГОНЬ' };
 
   AK.UI = {
@@ -55,15 +56,64 @@
   };
 
   // ---------- Масштаб ----------
+  // На экранах с масштабом рисуем до renderCap пикселей на точку (выбор в настройках, или adapt() снижает его,
+  // если видеокарта не успевает)
+  let renderCap = 2, renderDpr = 1;
   function resize() {
     const s = Math.min(window.innerWidth / 720, window.innerHeight / 960);
     const cw = Math.floor(720 * s), ch = Math.floor(960 * s);
     wrap.style.width = cw + 'px';
     wrap.style.height = ch + 'px';
     wrap.style.fontSize = (ch / 960) * 16 + 'px';
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    R.resize(Math.max(1, Math.round(cw * dpr)), Math.max(1, Math.round(ch * dpr)));
+    renderDpr = Math.min(window.devicePixelRatio || 1, renderCap);
+    R.resize(Math.max(1, Math.round(cw * renderDpr)), Math.max(1, Math.round(ch * renderDpr)));
   }
+
+  // ---------- Качество под видеокарту ----------
+  // Раз в ~1,5 с (90 кадров) проверяем, успевает ли видеокарта. Частота экрана бывает любой (56, 60, 144 Гц),
+  // поэтому сравниваем с ней самой: 10-й перцентиль интервалов между кадрами — это период экрана, когда кадр
+  // успевает. Есть замер видеокарты (R.gpu) — смотрим на него: если она рисует кадр дольше 80% периода, кадры то
+  // и дело опаздывают к смене кадра экрана и игра дёргается, хотя средний FPS почти полный. Замера нет — по самим
+  // интервалам: медиана заметно больше периода или больше 5% кадров опоздали. В обоих случаях — и если всё
+  // медленнее ~40 кадров/с — качество на ступень ниже (lower). Обратно не повышаем, чтобы оно не скакало.
+  // Всё это — только при «качество — авто» в настройках; иначе стоит выбранное там.
+  let dts = [], gms = [];
+  function adapt(dtMs) {
+    if (!AK.S.qAuto || dtMs > 100) return; // вручную, или вкладка была скрыта, или кадр сорвался по другой причине
+    dts.push(dtMs);
+    if (R.gpu && R.gpu.frame > 0) gms.push(R.gpu.frame);
+    if (dts.length < 90) return;
+    dts.sort((a, b) => a - b);
+    const p10 = dts[Math.floor(dts.length * 0.1)], med = dts[dts.length >> 1];
+    let slow = p10 > 24;
+    if (gms.length >= 45) {
+      gms.sort((a, b) => a - b);
+      slow = slow || gms[gms.length >> 1] > p10 * 0.8;
+    } else slow = slow || med > p10 * 1.25 || dts.filter(d => d > p10 * 1.5).length > dts.length * 0.05;
+    dts = []; gms = [];
+    if (slow) lower();
+  }
+  // Ступени: свет среднего качества, рисунок в полтора пикселя на точку вместо двух (на экранах с масштабом),
+  // свет низкого качества, рисунок в пиксель на точку. Свет выключен — его ступени пропускаются.
+  function lower() {
+    const GI = AK.GI, dpr = window.devicePixelRatio || 1;
+    if (R.gi && GI.quality === 'high') GI.setQuality('medium');
+    else if (Math.min(dpr, renderCap) > 1.5) { renderCap = 1.5; resize(); }
+    else if (R.gi && GI.quality === 'medium') GI.setQuality('low');
+    else if (Math.min(dpr, renderCap) > 1) { renderCap = 1; resize(); }
+    else return;
+    AK.Settings.sync(GI.quality, renderCap);
+  }
+  // Качество из настроек: вручную — ставим выбранное; авто — начинаем с лучшего и снова следим за видеокартой
+  function applyQuality() {
+    const S = AK.S, GI = AK.GI;
+    renderCap = S.qAuto ? 2 : S.res;
+    if (GI.ready) GI.setQuality(S.qAuto ? 'high' : S.giQ);
+    dts = []; gms = [];
+    resize();
+    AK.Settings.sync(GI.quality, renderCap);
+  }
+  AK.Settings.onQuality = applyQuality;
 
   // ---------- Игра ----------
   let playing = false;
@@ -147,6 +197,7 @@
         AK.UI.banner(on ? 'ВОДА ВКЛ' : 'ВОДА ВЫКЛ', on ? 'ракетка плавает; упавшие осколки поднимают воду, пойманные — убавляют' : '', 1.6);
         break;
       }
+      case 'KeyF': fps.on = !fps.on; el.fps.style.display = fps.on ? '' : 'none'; break;
       case 'KeyN': if (playing && !G.demo && !G.paused) G.skipLevel(); break;
       case 'KeyR': if (playing && !G.demo) { urlSeed = NaN; start(); } break;
     }
@@ -166,13 +217,33 @@
     overlay.classList.add('hidden');
     return;
   }
-  resize();
+  applyQuality();
   G.newGame(randomSeed(), true);
+
+  // ---------- Счётчик кадров (F) ----------
+  // Раз в полсекунды: кадров в секунду и самый долгий кадр; сколько в среднем заняли у процессора логика
+  // и подготовка рисунка; сколько рисовала видеокарта (если браузер даёт это замерить), из этого — свет;
+  // разрешение рисунка (пикселей на точку) и качество света
+  const GI_LABELS = { high: 'высокое', medium: 'среднее', low: 'низкое' };
+  function meter(dtMs, updMs, drawMs) {
+    fps.n++; fps.t += dtMs; fps.worst = Math.max(fps.worst, dtMs); fps.upd += updMs; fps.draw += drawMs;
+    if (R.gpu) { fps.gpu += R.gpu.frame; fps.gi += R.gpu.gi; }
+    if (fps.t < 500) return;
+    if (fps.on) {
+      const n = fps.n, gi = R.gi ? `свет ${GI_LABELS[AK.GI.quality] || AK.GI.quality}` : 'свет выкл';
+      const res = `разрешение ×${+renderDpr.toFixed(2)}`;
+      el.fps.textContent = `${Math.round((n * 1000) / fps.t)} FPS · худший кадр ${Math.round(fps.worst)} мс\n` +
+        `процессор: логика ${(fps.upd / n).toFixed(1)} · рисунок ${(fps.draw / n).toFixed(1)} мс\n` +
+        (R.gpu ? `видеокарта ${(fps.gpu / n).toFixed(1)} мс` + (R.gi ? `, из них свет ${(fps.gi / n).toFixed(1)}` : '') + '\n'
+          : 'видеокарта: замера нет\n') + `${res} · ${gi}`;
+    }
+    fps.n = fps.t = fps.worst = fps.upd = fps.draw = fps.gpu = fps.gi = 0;
+  }
 
   let lastT = performance.now();
   function frame(now) {
-    const dt = Math.min((now - lastT) / 1000, 0.05);
-    if (R.gi) AK.GI.adapt(now - lastT);
+    const raw = now - lastT, dt = Math.min(raw / 1000, 0.05);
+    adapt(raw);
     lastT = now;
     const dir = (keys.ArrowRight || keys.KeyD ? 1 : 0) - (keys.ArrowLeft || keys.KeyA ? 1 : 0);
     if (dir) {
@@ -180,8 +251,11 @@
       G.input.x = Math.max(0, Math.min(720, G.input.x + dir * 900 * dt));
     }
     if (G.state === 'over' && playing) playing = false;
+    const t0 = performance.now();
     G.update(dt);
+    const t1 = performance.now();
     AK.Draw.frame(G.time);
+    meter(raw, t1 - t0, performance.now() - t1);
     AK.UI.hud();
     if (playing) AK.UI.intensity();
     requestAnimationFrame(frame);

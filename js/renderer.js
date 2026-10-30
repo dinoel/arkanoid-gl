@@ -365,6 +365,8 @@
     gl = canvas.getContext('webgl2', { antialias: true, alpha: false, premultipliedAlpha: false });
     if (!gl) return false;
     hdr = !!gl.getExtension('EXT_color_buffer_float');
+    tq = gl.getExtension('EXT_disjoint_timer_query_webgl2');
+    R.gpu = tq ? { frame: 0, gi: 0 } : null;
     pMain = program(VS_MAIN, FS_MAIN);
     pBg = program(VS_FULL, FS_BG);
     pBright = program(VS_FULL, FS_BRIGHT);
@@ -436,6 +438,39 @@
   R.gi = false; R.giOn = true; R.giAvailable = false; R.giDebug = -1; R.amb = [0.1, 0.105, 0.13];
   R.toggleGI = () => { R.giOn = !R.giOn; return R.giOn && R.giAvailable; };
 
+  // ---- Время видеокарты ----
+  // Сколько видеокарта на самом деле рисует кадр (EXT_disjoint_timer_query_webgl2, если браузер его даёт):
+  // отдельно свет (сцена освещения и каскады) и всё остальное. Ответ приходит через кадр-другой, поэтому
+  // R.gpu — последний известный кадр, мс: frame — весь, gi — из него свет; null — замерять нечем.
+  let tq = null, gpuOpen = null, gpuN = 0, giN = -1, giMs = 0;
+  const gpuQ = [], gpuFree = [];
+  function gpuStart(tag) {
+    if (!tq || gpuOpen) return;
+    const q = gpuFree.pop() || gl.createQuery();
+    gl.beginQuery(tq.TIME_ELAPSED_EXT, q);
+    gpuOpen = { q, tag, n: gpuN };
+  }
+  function gpuStop() {
+    if (!gpuOpen) return;
+    gl.endQuery(tq.TIME_ELAPSED_EXT);
+    gpuQ.push(gpuOpen); gpuOpen = null;
+  }
+  // Готовые ответы — по порядку; если видеокарта сбилась (сменила частоту, переключилась), замеры в полёте
+  // недостоверны и выбрасываются
+  function gpuPoll() {
+    if (!tq) return;
+    const bad = gl.getParameter(tq.GPU_DISJOINT_EXT);
+    while (gpuQ.length) {
+      const x = gpuQ[0];
+      if (!bad && !gl.getQueryParameter(x.q, gl.QUERY_RESULT_AVAILABLE)) break;
+      gpuQ.shift(); gpuFree.push(x.q);
+      if (bad) continue;
+      const ms = gl.getQueryParameter(x.q, gl.QUERY_RESULT) / 1e6;
+      if (x.tag === 'gi') { giN = x.n; giMs = ms; }
+      else { R.gpu.gi = giN === x.n ? giMs : 0; R.gpu.frame = ms + R.gpu.gi; }
+    }
+  }
+
   function batchTo(fb, w, h, shx, shy) {
     gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
     gl.viewport(0, 0, w, h);
@@ -453,6 +488,7 @@
   R.beginGI = function (shx, shy) {
     R.gi = R.giOn && R.giAvailable;
     if (!R.gi) return false;
+    gpuStart('gi');
     const t = AK.GI.scene;
     batchTo(t.fb, t.w, t.h, shx, shy);
     giShx = shx; giShy = shy; AK.GI.ns = 0;
@@ -479,10 +515,13 @@
     gl.disable(gl.BLEND);
     bindTex(3, null);
     AK.GI.compute(sky);
+    gpuStop();
   };
 
   let frameShake = [0, 0];
   R.begin = function (time, shx, shy, c1, c2) {
+    gpuPoll();
+    gpuStart('main');
     frameShake = [shx, shy];
     to(msaa || T.scene);
     gl.disable(gl.BLEND);
@@ -609,6 +648,8 @@
     full();
     if (R.gi && R.giDebug >= 0) AK.GI.show(R.giDebug, 0.5);
     gl.activeTexture(gl.TEXTURE0);
+    gpuStop();
+    gpuN++;
   };
 
   // ---- Примитивы ----
