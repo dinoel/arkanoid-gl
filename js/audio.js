@@ -210,6 +210,14 @@
     noise({ f: 900, f2: 2600, q: 1.1, a: 0.005, d: 0.09, vol: 0.2, pan });
     tone({ f: 260, f2: 820, d: 0.1, glide: 0.09, vol: 0.14, pan, type: 'triangle' });
   };
+  // Рыбка отбила мяч хвостом: мокрый шлепок — хлопок шума и глухой удар — и пузырёк вверх
+  A.slap = pan => {
+    if (!A.ready || !gate('slap', 0.08)) return;
+    const t = ctx.currentTime;
+    noise({ f: 1700, f2: 600, q: 0.8, a: 0.002, d: 0.07, vol: 0.3, pan });
+    tone({ f: 190, f2: 70, d: 0.1, glide: 0.08, vol: 0.24, pan });
+    tone({ t: t + 0.04, f: 600, f2: 1400, d: 0.06, glide: 0.05, vol: 0.06, pan, type: 'triangle' });
+  };
   A.steel = (p, pan) => {
     if (!A.ready || !gate('steel', 0.04)) return;
     const v = clamp(p / 800, 0.2, 1);

@@ -2,7 +2,8 @@
 // Рыбка живёт в воде под ракеткой всегда (game.js заводит её с новой игрой) вместе со второй, видной сверху
 // (fish-top.js). Обычно она серебристая и занята своим: плавает, щиплет водоросли (seabed.js), отдыхает у дна,
 // следит за мячом, глотает воздух у поверхности, а от мяча или осколка, плюхнувшегося рядом, шарахается; тонущий
-// осколок обплывает. Бонус «рыбка» золотит одну из двух, наугад; золотая она на FISH_T
+// осколок обплывает. Бонус «рыбка» золотит одну из двух, наугад (та, что сверху, мяч не ловит, а отбивает
+// хвостом); золотая она на FISH_T
 // секунд (ещё бонус — ещё столько же, но не больше FISH_MAX; время идёт, только пока мяч в игре), и тогда она
 // ловит мяч, который ракетка упустила: заранее плывёт туда, где падающий мяч пересечёт её дорожку, втягивает
 // его ртом, отплывает из-под ракетки, задирает нос к кирпичам и выплёвывает мяч вверх (b.rise: мяч проходит
@@ -122,7 +123,7 @@
     Object.assign(f, {
       G, api, left: 0, gold: 0, flare: 0, x, y, z: 0, yaw, yg: yaw, pitch: 0, pg: 0, oy: 0, op: 0,
       dx: 1, dy: 0, dz: 0, ang: 0, sp: 0, acc: 0, vx: 0, vy: 0,
-      t: 0, ph: 0, amp: 1, br: 0, hold: null, chew: 0, aim: null, aimT: 0, spitT: 0, suck: null,
+      t: 0, ph: 0, amp: 1, br: 0, hold: null, chew: 0, aim: null, aimT: 0, spitT: 0, suck: null, saves: 0,
       mouth: 0, gill: 0, full: 0, lean: 0, tg: 0, offT: 0, pecL: 0.3, pecR: 0.3, fold: 0, lookX: x, lookY: y, bub: [],
       jolt: 0, seen: new WeakSet(), // испуг (1 — только что вздрогнула) и осколки, которых уже пугалась
       mode: null, last: '', modeT: 0, goal: { x, y }, vmax: 0, scare: 0, peck: 0, peckPh: 0, nib: null,
@@ -203,7 +204,7 @@
 
   function spit(f) {
     const b = f.hold, a = f.aim !== null ? f.aim : clamp(wrap(f.ang + Math.PI / 2), -0.5, 0.5) - Math.PI / 2; // куда метит, вверх
-    f.hold = null; f.aim = null; f.suck = null; f.spitT = 0.35; f.mouth = 1; f.gill = 1;
+    f.hold = null; f.aim = null; f.suck = null; f.spitT = 0.35; f.mouth = 1; f.gill = 1; f.saves++;
     f.sp = -110; // отдача
     const sp = f.api.targetSpeed(), mx = f.x + f.dx * 4, my = f.y + f.dy * 4;
     b.x = clamp(mx + Math.cos(a) * (b.r + 2), L + b.r, RX - b.r); b.y = my + Math.sin(a) * (b.r + 2);

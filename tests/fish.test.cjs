@@ -2,7 +2,8 @@
 // node --test tests/fish.test.cjs — the fish and the seaweed in a headless game with water. Two fish always live
 // under the paddle and mind their own business: the side-view one (fish.js) and the top-down one (fish-top.js).
 // The fish bonus turns one of them gold, at random, and then, while the paddle runs away from the ball, that fish
-// catches the ball and spits it back up for as long as its time lasts.
+// sends the ball back up for as long as its time lasts: the side-view one catches it and spits it out, the top-down
+// one bats it with its tail.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { game, frames } = require('./headless.cjs');
@@ -42,7 +43,7 @@ test('both fish are always there: they swim around under water, but without the 
       st[i].modes.add(f.mode);
       st[i].x0 = Math.min(st[i].x0, f.x); st[i].x1 = Math.max(st[i].x1, f.x);
       assert.ok(f.y > AK.Water.shoreAt(f.x) + 3, `the ${kind(f)} fish stays under water: y ${f.y.toFixed(1)}`);
-      assert.ok(!f.hold, `the ${kind(f)} fish never catches the ball`);
+      assert.ok(!f.hold && !f.saves, `the ${kind(f)} fish never catches the ball`);
     });
     if (G.lives < 3) { lost++; G.lives = 3; } // промах стоит жизни; возвращаем её, чтобы смотреть дальше
   });
@@ -72,7 +73,8 @@ test('the bonus turns one fish gold, at random; more bonuses add time to it, up 
 });
 
 for (const k of KINDS) {
-  test(`the gold ${k} fish catches a ball the paddle missed and spits it back up`, () => {
+  const how = k === 'side' ? 'catches it and spits it back up' : 'bats it back up with its tail';
+  test(`the gold ${k} fish saves a ball the paddle missed: ${how}`, () => {
     const { G } = level1();
     const f = fishOf(G, k);
     f.add();
@@ -83,14 +85,15 @@ for (const k of KINDS) {
     frames(G, 30, () => {
       dodge(G);
       if (f.hold) caught = true;
-      // выплюнутый мяч проходит ракетку снизу и летит вверх
-      saved = caught && !f.hold && G.balls.some(b => b.vy < 0 && b.y < G.paddle.y - 40);
+      // выплюнутый или отбитый мяч проходит ракетку снизу и летит вверх
+      saved = f.saves > 0 && !f.hold && G.balls.some(b => b.vy < 0 && b.y < G.paddle.y - 40);
       return saved;
     });
-    assert.ok(caught, 'the fish catches the ball');
-    assert.ok(saved, 'and spits it up past the paddle');
+    if (k === 'side') assert.ok(caught, 'the fish catches the ball in its mouth');
+    else assert.ok(!caught, 'the fish does not take the ball into its mouth');
+    assert.ok(saved, 'and the ball flies up past the paddle');
     assert.equal(G.lives, 3, 'no life lost');
-    assert.ok(G.fishes.every(o => o === f || !o.hold), 'the silver fish leaves the ball alone');
+    assert.ok(G.fishes.every(o => o === f || (!o.hold && !o.saves)), 'the silver fish leaves the ball alone');
   });
 
   test(`the gold ${k} fish saves the ball again and again until its time runs out, then turns silver again`, () => {
@@ -98,13 +101,11 @@ for (const k of KINDS) {
     const f = fishOf(G, k);
     f.add();
     G.input.fire = true;
-    let saves = 0, holding = false;
     const done = frames(G, 60, () => {
       dodge(G);
-      if (f.hold && !holding) saves++;
-      holding = !!f.hold;
       return f.left <= 0 && !f.hold;
     });
+    const saves = f.saves;
     assert.ok(done, 'the time runs out');
     assert.ok(saves > 3, `it saved the ball ${saves} times`);
     assert.equal(G.lives, 3, 'and meanwhile no life was lost');

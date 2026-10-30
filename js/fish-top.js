@@ -1,15 +1,15 @@
 'use strict';
-// Вторая рыбка, прежняя: живёт в воде вместе с рыбкой из fish.js и умеет всё то же, но нарисована сверху и плывёт,
-// изгибаясь в плоскости экрана. Бонус «рыбка» (game.js) золотит одну из двух, наугад.
+// Вторая рыбка, прежняя: живёт в воде вместе с рыбкой из fish.js, но нарисована сверху и плывёт, изгибаясь
+// в плоскости экрана. Бонус «рыбка» (game.js) золотит одну из двух, наугад.
 //
 // Рыбка живёт в воде под ракеткой всегда (game.js заводит её с новой игрой). Обычно она серебристая и занята
 // своим: плавает, щиплет водоросли (seabed.js), отдыхает у дна, следит за мячом, крутит петли, глотает воздух
 // у поверхности, а от мяча или осколка, плюхнувшегося рядом, шарахается; тонущий осколок обплывает. Бонус делает
 // её золотой на FISH_T секунд (ещё бонус — ещё столько же, но не больше FISH_MAX; время идёт, только пока мяч
-// в игре), и тогда она ловит мяч, который ракетка упустила: заранее плывёт туда, где падающий мяч пересечёт её
-// дорожку, втягивает его ртом, отплывает из-под ракетки, разворачивается носом к кирпичам и выплёвывает мяч вверх
-// (b.rise: мяч проходит ракетку снизу насквозь), а сама от отдачи сдаёт назад. Пока мяч у неё во рту, его нет
-// в G.balls. Время на исходе — вспыхивает, вышло — доплёвывает мяч и снова становится серебристой.
+// в игре), и тогда она, как дельфин, отбивает хвостом мяч, который ракетка упустила (рыбка из fish.js ловит его
+// ртом): заранее подставляет хвост туда, где падающий мяч пересечёт её дорожку, на подлёте замахивается, отводя
+// хвост от мяча, и хлёстко бьёт навстречу. Мяч летит вверх, к кирпичам (b.rise: проходит ракетку снизу насквозь),
+// а рыбку от удара бросает вперёд. Время на исходе — вспыхивает, вышло — снова становится серебристой.
 //
 // Движение. Рыбка — не точка, а позвоночник из N позвонков. Нос ведёт рулёжка: курс, скорость, поворот с пределом
 // угловой скорости; на развороте рыбка притормаживает и описывает дугу вверх, от дна, а цель чуть позади
@@ -36,9 +36,11 @@
   const TURN = 16;                    // рад/с: предел угловой скорости
   const ARRIVE = 8;                   // 1/с: на подходе к цели скорость — расстояние·ARRIVE
   const BACK = 90, BACK_REACH = 26;   // px/s, px: задним ходом — не быстрее и не дальше
-  const CHEW = 0.3, HOLD = 1.4;       // с: мяч во рту — не меньше (и не дольше — тогда плюёт, куда смотрит)
-  const AIM = 0.12, AIM_MAX = 0.45;   // с: целится носом хотя бы столько, но не дольше
   const TAIL = 25;                    // px: длина хвоста-вуали
+  const REACH = 60;                   // px: от носа до середины вуали — ею рыбка и бьёт
+  const HIT_R = 22;                   // px: вуаль достаёт мяч на столько от своей середины (плюс радиус мяча)
+  const WIND = 0.14;                  // с: мяч долетит до хвоста за столько — рыбка замахивается
+  const SLAP = 0.4, FLICK = 16;       // с, px: удар с затуханием и его размах у хвостового стебля
   const MARGIN = 16;                  // px: на столько ниже кромки воды держится без дела (нос — до 4 px)
   const SPLASH_R = 150, SINK_R = 30;  // px: осколок, упавший в воду ближе, пугает; тонущий ещё ближе — обплывает
   const LX = -0.45, LY = -0.89;       // направление на свет (вверх-влево, как в draw.js)
@@ -100,8 +102,9 @@
     const x = rand(L + 80, RX - 80), y = (Math.min(surf(G, x) + MARGIN, BOT) + BOT) / 2, ang = Math.random() < 0.5 ? 0 : Math.PI;
     Object.assign(f, {
       G, api, left: 0, gold: 0, flare: 0, x, y, ang, sp: 0, om: 0, acc: 0, vx: 0, vy: 0,
-      t: 0, ph: 0, amp: 1, br: 0, hold: null, chew: 0, aim: null, aimT: 0, spitT: 0, suck: null,
-      mouth: 0, gill: 0, full: 0, lean: 0, tf: ang + Math.PI, pecL: 0.3, pecR: 0.3, bub: [],
+      t: 0, ph: 0, amp: 1, br: 0, mouth: 0, gill: 0, lean: 0, tf: ang + Math.PI, pecL: 0.3, pecR: 0.3, bub: [],
+      // замах (0…1), удар (1 → 0), в какую сторону бьёт, рывок после удара, где ударила, сколько раз спасла мяч
+      wind: 0, slap: 0, side: 1, kickT: 0, hitAt: null, saves: 0,
       mode: null, last: '', modeT: 0, goal: { x, y }, vmax: 0, scare: 0, peck: 0, peckPh: 0, nib: null, loop: null,
       jolt: 0, seen: new WeakSet(), // испуг (1 — только что вздрогнула) и осколки, которых уже пугалась
       p: new Float32Array(N * 2),   // позвоночник
@@ -125,11 +128,11 @@
     }
     f.left = Math.min(f.left + FISH_T, FISH_MAX);
   };
-  // Новый уровень: мяч во рту пропадает (подаётся новый)
-  proto.reset = function () { this.hold = null; this.aim = null; this.suck = null; };
+  // Новый уровень: замах и удар не доигрываются
+  proto.reset = function () { this.wind = 0; this.slap = 0; this.hitAt = null; };
 
-  // Куда плыть носом: туда, где раньше всех падающий мяч пересечёт дорожку (с отскоками от стен);
-  // если никто не падает — держится под самым нижним мячом, лениво прохаживаясь
+  // Куда подставить хвост: туда, где раньше всех падающий мяч пересечёт дорожку (с отскоками от стен);
+  // если никто не падает — хвост под самым нижним мячом, рыбка лениво прохаживается
   function target(f, y0) {
     let best = null, bt = Infinity, low = null;
     for (const b of f.G.balls) {
@@ -155,39 +158,48 @@
     }
   }
 
-  // Мяч, падающий на голову или переднюю половину тела, рыбка втягивает ртом
-  function catchBall(f) {
-    const G = f.G, p = f.p, mx = f.x + Math.cos(f.ang) * 3, my = f.y + Math.sin(f.ang) * 3;
-    for (let i = 0; i < G.balls.length; i++) {
-      const b = G.balls[i];
+  // С какой стороны от хвостового стебля точка: +1 — куда волна в pose() гнёт тело при сдвиге больше нуля
+  function sideOf(f, x, y) {
+    const p = f.p, i = (N - 1) * 2, dx = p[i - 2] - p[i], dy = p[i - 1] - p[i + 1];
+    return (x - p[i]) * -dy + (y - p[i + 1]) * dx >= 0 ? 1 : -1;
+  }
+  // Удар хвостом. Мяч на подлёте к вуали — рыбка замахивается, отводя хвост от него; мяч у вуали (или задел
+  // тело) — бьёт
+  function tailBall(f, dt) {
+    const G = f.G, q = f.q, i = (N - 1) * 2;
+    const hx = q[i] + Math.cos(f.tf) * TAIL * 0.55, hy = q[i + 1] + Math.sin(f.tf) * TAIL * 0.55; // середина вуали
+    let wind = 0;
+    for (const b of G.balls) {
       if (b.stuck || b.vy <= 0) continue;
-      let hit = Math.hypot(b.x - mx, b.y - my) < 16 + b.r;
-      for (let j = 1; !hit && j <= 7; j++) hit = Math.hypot(b.x - p[j * 2], b.y - p[j * 2 + 1]) < WID[j] + b.r + 3;
-      if (!hit) continue;
-      G.balls.splice(i, 1);
-      f.hold = b; f.chew = 0; f.mouth = 1; f.gill = 1; f.aim = null; f.aimT = 0;
-      f.suck = { x: b.x, y: b.y, t: 0, r: b.r };
-      b.vx = b.vy = 0; b.trail.length = 0;
-      f.api.sfx('gulp', f.api.pan(f.x));
-      bubbles(f, 6, mx, my);
-      return;
+      let hit = Math.hypot(b.x - hx, b.y - hy) < HIT_R + b.r;
+      for (let j = 0; !hit && j < N; j += 2) hit = Math.hypot(b.x - q[j * 2], b.y - q[j * 2 + 1]) < WID[j] + b.r + 2;
+      if (hit) { slap(f, b, hx, hy); return; }
+      const t = (hy - HIT_R - b.r - b.y) / b.vy;
+      if (t < WIND && t > -0.05 && Math.abs(b.x + b.vx * Math.max(t, 0) - hx) < HIT_R + 20) { wind = 1; f.side = sideOf(f, b.x, b.y); }
     }
+    f.wind += (wind - f.wind) * (1 - Math.exp(-dt * 16));
   }
 
-  // Куда целиться носом: вверх, с поправкой к середине поля и разбросом
-  const aimAt = f => -Math.PI / 2 + clamp(((W / 2 - f.x) / (W / 2)) * 0.35 + rand(-0.2, 0.2), -0.5, 0.5);
+  // Куда отбить: вверх, с поправкой к середине поля и разбросом
+  const aimAt = x => -Math.PI / 2 + clamp(((W / 2 - x) / (W / 2)) * 0.35 + rand(-0.2, 0.2), -0.5, 0.5);
 
-  function spit(f) {
-    const b = f.hold, a = clamp(wrap(f.ang + Math.PI / 2), -0.5, 0.5) - Math.PI / 2; // куда смотрит, но вверх
-    f.hold = null; f.aim = null; f.suck = null; f.spitT = 0.35; f.mouth = 1; f.gill = 1;
-    f.sp = -110; // отдача
-    const sp = f.api.targetSpeed(), mx = f.x + Math.cos(f.ang) * 4, my = f.y + Math.sin(f.ang) * 4;
-    b.x = clamp(mx + Math.cos(a) * (b.r + 2), L + b.r, RX - b.r); b.y = my + Math.sin(a) * (b.r + 2);
+  // Хвост хлёстко бьёт навстречу мячу, и тот летит вверх; рыбку от удара бросает вперёд, а нос отдаёт в другую
+  // сторону
+  function slap(f, b, hx, hy) {
+    f.side = sideOf(f, b.x, b.y); f.slap = 1; f.kickT = 0.35; f.hitAt = { x: b.x, y: b.y }; f.saves++;
+    f.sp = Math.max(f.sp, 0) + 240; f.om -= f.side * 5; f.gill = 1;
+    const a = aimAt(b.x), sp = f.api.targetSpeed();
+    b.x = clamp(b.x, L + b.r, RX - b.r);
     b.vx = Math.cos(a) * sp; b.vy = Math.sin(a) * sp; b.w = 0; b.rise = true; b.trail.length = 0;
-    f.G.balls.push(b);
-    f.api.sfx('spit', f.api.pan(f.x));
-    bubbles(f, 8, mx, my);
-    f.api.sparks(b.x, b.y, 8, [1, 0.8, 0.35], 220, Math.cos(a), Math.sin(a), 0.8);
+    f.api.sfx('slap', f.api.pan(b.x));
+    AK.Water.push(hx, hy, 0.6, 14);
+    bubbles(f, 10, hx, hy);
+    f.api.sparks(b.x, b.y, 10, [1, 0.8, 0.35], 260, Math.cos(a), Math.sin(a), 0.9);
+  }
+  // Сдвиг хвостового стебля от удара, px: замах — от мяча, удар — рывком к нему и затухающие колебания
+  function flick(f) {
+    const u = 1 - f.slap, hit = f.slap <= 0 ? 0 : u < 0.1 ? U.smooth(u / 0.1) : Math.exp(-(u - 0.1) * 6) * Math.cos((u - 0.1) * 14);
+    return f.side * FLICK * (hit - 0.5 * f.wind);
   }
 
   // Рулёжка носа: желаемая скорость (dvx, dvy), а если задан курс head — разворот на месте; near — цель рядом,
@@ -208,7 +220,7 @@
     f.ang = wrap(f.ang + f.om * dt);
     const goal = back ? spd : spd * clamp(Math.cos(err), 0.08, 1); // на развороте притормаживает
     const sp0 = f.sp;
-    if (f.spitT > 0.12) f.sp *= Math.exp(-dt * 6); // отдача после плевка — вода гасит её плавно
+    if (f.kickT > 0.12) f.sp *= Math.exp(-dt * 3); // рывок после удара хвостом — вода гасит его плавно
     else f.sp += clamp(goal - f.sp, -BRAKE * dt, ACC * dt);
     f.acc = (f.sp - sp0) / dt;
     f.vx = Math.cos(f.ang) * f.sp; f.vy = Math.sin(f.ang) * f.sp;
@@ -228,15 +240,15 @@
     }
   }
 
-  // Плавательная волна поверх позвоночника; касательные — уже волнистого
+  // Плавательная волна поверх позвоночника, а с ударом — и хлёст задней половины тела; касательные — уже волнистого
   function pose(f) {
-    const p = f.p, q = f.q, tn = f.tn;
+    const p = f.p, q = f.q, tn = f.tn, fl = flick(f);
     for (let i = 0; i < N; i++) {
       const j0 = Math.max(i - 1, 0), j1 = Math.min(i + 1, N - 1);
       let dx = p[j0 * 2] - p[j1 * 2], dy = p[j0 * 2 + 1] - p[j1 * 2 + 1];
       const l = Math.hypot(dx, dy) || 1, s = i / (N - 1);
       dx /= l; dy /= l;
-      const off = f.amp * (0.1 + 0.9 * s * s) * Math.sin(f.ph - 5.3 * s);
+      const off = f.amp * (0.1 + 0.9 * s * s) * Math.sin(f.ph - 5.3 * s) + fl * Math.max(0, (s - 0.3) / 0.7) ** 2;
       q[i * 2] = p[i * 2] - dy * off; q[i * 2 + 1] = p[i * 2 + 1] + dx * off;
     }
     for (let i = 0; i < N; i++) {
@@ -248,7 +260,7 @@
 
   // Шаг рыбки
   proto.update = function (dt) {
-    const f = this, G = f.G, p = G.paddle, y0 = lane(G);
+    const f = this, G = f.G, y0 = lane(G);
     f.t += dt;
     if (G.state === 'play') f.left = Math.max(0, f.left - dt);
     f.gold += ((f.left > 0 ? 1 : 0) - f.gold) * (1 - Math.exp(-dt * 3));
@@ -256,38 +268,23 @@
     f.scare = Math.max(0, f.scare - dt);
     f.mouth = Math.max(0, f.mouth - dt * 3);
     f.gill = Math.max(0, f.gill - dt * 2.5);
-    f.spitT = Math.max(0, f.spitT - dt);
+    f.kickT = Math.max(0, f.kickT - dt);
+    f.slap = Math.max(0, f.slap - dt / SLAP);
     f.jolt = Math.max(0, f.jolt - dt * 3);
-    // осколок плюхнулся рядом: занятая мячом рыбка только вздрагивает, остальное — в idle
+    // осколок плюхнулся рядом: золотая рыбка только вздрагивает, остальное — в idle
     const hit = splash(f);
-    if (hit && (f.hold || f.left > 0)) flinch(f, 3.5);
-    f.full += ((f.hold ? 1 : 0) - f.full) * (1 - Math.exp(-dt * 12));
-    if (f.suck && (f.suck.t += dt) > 0.1) f.suck = null;
+    if (hit && f.left > 0) flinch(f, 3.5);
     let tx = f.x, ty = y0 + Math.sin(f.t * 0.9) * 3, head = null;
-    if (f.hold) {
-      // отплывает из-под ракетки, чтобы мяч не вылетел сквозь неё, разворачивается носом вверх и плюёт
-      f.chew += dt;
-      const gap = p.hw + p.r + 30;
-      let side = f.x >= p.x ? 1 : -1;
-      if (p.x + side * (gap + 24) > RX - 30 || p.x + side * (gap + 24) < L + 30) side = -side;
-      const under = Math.abs(f.x - p.x) < gap;
-      if (f.aim === null) {
-        if (under) tx = p.x + side * (gap + 24);
-        if (f.chew >= HOLD || (f.chew >= CHEW && !under && Math.abs(f.sp) < 200)) { f.aim = aimAt(f); f.aimT = 0; }
-      }
-      if (f.aim !== null) {
-        head = f.aim;
-        f.aimT += dt;
-        if ((f.aimT > AIM && Math.abs(wrap(f.ang - f.aim)) < 0.12) || f.aimT > AIM_MAX) spit(f);
-      }
-    } else if (f.left > 0) {
-      if (f.spitT <= 0.12) tx = target(f, y0); // только что плюнула — миг стоит
-      else head = f.ang;
+    if (f.left > 0) {
+      // нос — на REACH впереди точки встречи, чтобы там оказался хвост. Носом к стенке хвост до неё не достанет —
+      // тогда мяч встречает тело, и хвост бьёт всё равно
+      if (f.kickT > 0.12) head = f.ang; // только что ударила — проносится вперёд
+      else tx = clamp(target(f, y0) + (Math.cos(f.ang) >= 0 ? REACH : -REACH), L + 14, RX - 14);
       f.mode = null;
-      catchBall(f);
-    }
-    if (f.hold || f.left > 0) swim(f, dt, clamp((tx - f.x) * ARRIVE, -V, V), clamp((ty - f.y) * 6, -240, 240), head, Math.abs(tx - f.x) < BACK_REACH);
-    else if (f.spitT > 0.12) swim(f, dt, 0, 0, f.ang, false);
+      tailBall(f, dt);
+    } else f.wind = 0;
+    if (f.left > 0) swim(f, dt, clamp((tx - f.x) * ARRIVE, -V, V), clamp((ty - f.y) * 6, -240, 240), head, Math.abs(tx - f.x) < BACK_REACH);
+    else if (f.kickT > 0.12) swim(f, dt, 0, 0, f.ang, false);
     else idle(f, dt, hit);
     keepIn(f);
     follow(f, dt);
@@ -312,7 +309,6 @@
       if (sg > 0) f.pecR += (goal - f.pecR) * (1 - Math.exp(-dt * 10));
       else f.pecL += (goal - f.pecL) * (1 - Math.exp(-dt * 10));
     }
-    if (f.hold) { f.hold.x = f.x; f.hold.y = f.y; }
     if (Math.random() < dt * (0.3 + 3 * r)) bubbles(f, 1, f.x - Math.cos(f.ang) * 10, f.y - Math.sin(f.ang) * 10);
     for (const b of f.bub) { b.t += dt; b.y -= b.vy * dt; b.x += Math.sin(b.t * 9 + b.ph) * 14 * dt; }
     f.bub = f.bub.filter(b => b.t < b.max && AK.Water.depth(b.x, b.y) > 0);
@@ -488,8 +484,8 @@
       const s = i / (N - 1);
       qx[i] = f.q[i * 2]; qy[i] = f.q[i * 2 + 1];
       nx[i] = -f.tn[i * 2 + 1]; ny[i] = f.tn[i * 2];
-      // с мячом во рту брюхо раздуто, на вдохе жабры чуть расходятся
-      hw[i] = WID[i] * (1 + 0.2 * f.full * Math.exp(-(((s - 0.36) / 0.17) ** 2)) + 0.04 * Math.sin(f.br) * Math.exp(-(((s - 0.22) / 0.08) ** 2)));
+      // на вдохе жабры чуть расходятся
+      hw[i] = WID[i] * (1 + 0.04 * Math.sin(f.br) * Math.exp(-(((s - 0.22) / 0.08) ** 2)));
       for (const sg of [1, -1]) lit[i * 2 + (sg > 0 ? 0 : 1)] = 0.85 + 0.3 * Math.max(0, sg * (nx[i] * LX + ny[i] * LY));
     }
   }
@@ -685,7 +681,7 @@
     palette(g);
     const r = Math.min(Math.abs(f.sp) / V, 1);
     // время на исходе — вспыхивает
-    const blink = f.left > 0 && f.left < 3 && !f.hold ? Math.pow(0.5 + 0.5 * Math.cos(f.left * TAU * 2.5), 2) : 0;
+    const blink = f.left > 0 && f.left < 3 ? Math.pow(0.5 + 0.5 * Math.cos(f.left * TAU * 2.5), 2) : 0;
     // тень на дне — ниже и правее (свет сверху-слева), мягкая
     R.lit(R.gi ? 1 : 0);
     for (let i = 0; i < N; i += 2) { R.color(0, 0.015, 0.025, 0.12); R.soft(qx[i] + 5, qy[i] + 12, hw[i] * 1.8); }
@@ -694,7 +690,7 @@
     // ореол — золотая рыбка светится сама, серебристую лишь чуть подсвечивает вода
     R.lit(0);
     at(0.35, 0);
-    R.color(lerp(0.5, 1, g), lerp(0.7, 0.6, g), lerp(1, 0.18, g), lerp(0.05, 0.16 + 0.1 * f.full + 0.25 * blink, g), 1); R.soft(fx, fy, 58);
+    R.color(lerp(0.5, 1, g), lerp(0.7, 0.6, g), lerp(1, 0.18, g), lerp(0.05, 0.16 + 0.25 * blink, g), 1); R.soft(fx, fy, 58);
     // превращение: золотое кольцо расходится, вспышка
     if (f.flare > 0) {
       const k = 1 - f.flare;
@@ -709,16 +705,14 @@
     head(f);
     dorsal(f);
     R.lit(0);
-    // мяч во рту светится сквозь брюхо
-    if (f.full > 0.05) { at(0.34, 0); R.color(0.6, 0.85, 1, 0.5 * f.full, 1); R.soft(fx, fy, 14); }
     if (Wt.on) under(f.x, f.y, 160, 0.6, bodyShape);
     if (blink > 0.01) { R.color(1, 0.9, 0.6, 0.45 * blink, 1); bodyShape(); }
     if (f.flare > 0) { R.color(1, 0.9, 0.55, 0.6 * f.flare * f.flare, 1); bodyShape(); }
-    // мяч втягивается в рот
-    if (f.suck) {
-      const k = U.smooth(f.suck.t / 0.1), tx = ny[0], ty = -nx[0];
-      const mx = qx[0] + tx * hw[0], my = qy[0] + ty * hw[0], br = f.suck.r * (1 - 0.6 * k);
-      R.color(0.9, 0.94, 1, 1 - k * 0.7); R.sphere(lerp(f.suck.x, mx, k), lerp(f.suck.y, my, k), br);
+    // там, где хвост ударил по мячу, расходится кольцо волны и вспыхивает
+    if (f.slap > 0 && f.hitAt) {
+      const k = 1 - f.slap, h = f.hitAt;
+      R.color(0.85, 0.95, 1, 0.5 * f.slap, 1); R.ring(h.x, h.y, 8 + 34 * U.smooth(k), 0.1);
+      R.color(1, 0.85, 0.45, 0.45 * f.slap * f.slap, 1); R.soft(h.x, h.y, 22);
     }
     for (const b of f.bub) {
       const a = 1 - b.t / b.max;
