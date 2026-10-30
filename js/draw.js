@@ -2,7 +2,7 @@
 // Отрисовка сцены: сцена для глобального освещения (что светит и что заслоняет), сетка поля тяготения,
 // тени, кирпичи с фаской и освещением, трещины, обломки, ракетка, мячи со следом и маркерами вращения,
 // бонусы, лазеры, частицы, ударные волны, рамка поля, прожекторы с цветомузыкой, магнит ракетки, снаряды
-// боссов (сами боссы — кирпичи, а их глаза, усы и перепонки рисует boss.js).
+// боссов (сами боссы — кирпичи, а их глаза, усы и перепонки рисует boss.js; рыбок — fish.js и fish-top.js, водоросли — seabed.js).
 (function (AK) {
   const { R, U, P } = AK;
   const Wt = AK.Water;
@@ -96,7 +96,7 @@
   const E_BALL = 26, E_FIRE = 30, E_PADDLE = 1.6, E_CAP = 3, E_LASER = 6, E_SPARK = 3, E_EDGE = 0.6, E_HIT = 2;
   const E_SPOT = 60; // прожекторы на стенах
   const E_SHOT = 4;  // снаряды босса
-  const SELF = { normal: 0.25, strong: 0.14, explosive: 0, steel: 0 }; // собственное свечение кирпичей
+  const SELF = { normal: 0.25, strong: 0.14, explosive: 0, steel: 0, glass: 0, armor: 0.2, regen: 0.3, crystal: 0.7, phase: 0.2 }; // собственное свечение кирпичей
   const SKY = [0.05, 0.055, 0.075];   // свет, приходящий из-за края экрана (снизу, из-под ракетки)
   const LIT_BRICK = 0.8;             // кирпич на 80% освещается и на 20% светится сам — всегда различим
 
@@ -110,13 +110,14 @@
     // прожекторы светят только в свой конус (см. gi.js); в список источников — раньше мячей, чтобы при
     // мультиболе в растр уходили лишние мячи, а не прожекторы. Источник — чуть впереди линзы, целиком в поле.
     for (const s of spotLights(g)) R.giSpot(s.x, s.y, s.r, s.col[0], s.col[1], s.col[2], s.ang, s.half, s.soft);
-    // кирпичи заслоняют свет и слабо светятся своим цветом; взрывные тлеют оранжевым; удар вспыхивает
+    // кирпичи заслоняют свет и слабо светятся своим цветом; взрывные тлеют оранжевым; удар вспыхивает.
+    // Стекло свет пропускает, растаявший призрак — тоже.
     for (const k of g.bricks) {
-      if (!k.alive) continue;
+      if (!k.alive || k.kind === 'glass' || k.ghost) continue;
       const s = appear(g, k);
       if (s <= 0) continue;
       const wo = s < 1 ? scaled(k.world, k.n, k.x, k.y, s, tmpO) : k.world;
-      const [r, gg, b] = k.color, f = k.flash * E_HIT;
+      const [r, gg, b] = k.kind === 'crystal' ? gemColor(k, t) : k.color, f = k.flash * E_HIT;
       if (k.kind === 'explosive') {
         const q = (0.8 + 0.7 * Math.sin(t * 6 + k.phase)) * s;
         R.color(q + f, q * 0.42 + f, q * 0.1 + f, 1);
@@ -135,6 +136,7 @@
       R.color(c[0] * 1.6, c[1] * 1.6, c[2] * 1.6, 1);
       R.poly(capsule(u.x, u.y + Math.sin(u.t * 6) * 1.5, 9, 9.5, cap));
     }
+    for (const f of g.fishes) f.gi();
     // ракетка светится цветом уровня (под магнитом — ярче), торцы — красным
     const p = g.paddle, pe = E_PADDLE * (1 + p.flash * 1.5 + g.magnet * 1.5) * (p.stone > 0 ? 0.1 : 1); // камень не светится
     R.color(c2[0] * pe, c2[1] * pe, c2[2] * pe, 1);
@@ -225,16 +227,17 @@
 
   // ---------- Тени ----------
   function shadows(g) {
-    R.color(0, 0, 0, 0.38);
     for (const k of g.bricks) {
       if (!k.alive) continue;
       const s = appear(g, k);
       if (s <= 0) continue;
+      R.color(0, 0, 0, k.kind === 'glass' ? 0.14 : k.kind === 'phase' ? 0.38 * k.vis : 0.38);
       const n = k.n, w = k.world;
       for (let i = 0; i < n * 2; i += 2) { tmpS[i] = k.x + (w[i] - k.x) * s + 7; tmpS[i + 1] = k.y + (w[i + 1] - k.y) * s + 9; }
       R.poly(tmpS.subarray(0, n * 2));
     }
     const p = g.paddle;
+    R.color(0, 0, 0, 0.38);
     if (!hullInWater(g)) R.poly(capsule(p.x + 7, p.y + 9, p.hw, p.r, cap)); // на воде тень рисует FS_BG
     R.color(0, 0, 0, 0.35);
     for (const b of g.balls) R.soft(b.x + 6, b.y + 8, b.r * 1.7);
@@ -242,46 +245,69 @@
   }
 
   // ---------- Кирпичи ----------
+  const TOUGH = { strong: 1, regen: 1, armor: 1 };
+  // Кристалл переливается всеми цветами
+  const gemColor = (k, t) => U.hsl(t * 0.18 + k.phase / 6.283, 0.85, 0.64);
+  // Сердцебиение живого кирпича: два толчка и пауза
+  const beat = x => { const f = x % 1; return Math.exp(-((f - 0.1) ** 2) * 600) + 0.6 * Math.exp(-((f - 0.3) ** 2) * 600); };
+  // Радиус вписанной окружности формы (для бликов внутри кирпича)
+  function inradius(k) {
+    if (k.inr) return k.inr;
+    if (k.circle) return (k.inr = k.circle);
+    const v = k.local, n = v.length / 2;
+    let m = Infinity;
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n, ex = v[j * 2] - v[i * 2], ey = v[j * 2 + 1] - v[i * 2 + 1];
+      m = Math.min(m, Math.abs(v[i * 2] * ey - v[i * 2 + 1] * ex) / (Math.hypot(ex, ey) || 1));
+    }
+    return (k.inr = m);
+  }
   function brick(g, k, t) {
     const s = appear(g, k);
     if (s <= 0) return;
     const n = k.n;
     const wo = s < 1 ? scaled(k.world, n, k.x, k.y, s, tmpO) : k.world;
     const wi = s < 1 ? scaled(k.worldIn, n, k.x, k.y, s, tmpI) : k.worldIn;
-    let [r, gg, b] = k.color;
-    if (k.kind === 'strong') { const f = 0.7 + 0.3 * (k.hp / k.maxHp); r *= f; gg *= f; b *= f; }
+    let [r, gg, b] = k.kind === 'crystal' ? gemColor(k, t) : k.color;
+    if (TOUGH[k.kind]) { const f = 0.7 + 0.3 * (k.hp / k.maxHp); r *= f; gg *= f; b *= f; }
     else if (k.kind === 'steel') { const f = 0.62 + 0.38 * (k.mass / k.mass0); r *= f; gg *= f; b *= f; } // сталь тускнеет, теряя массу
-    const steel = k.kind === 'steel';
+    const steel = k.kind === 'steel', hardy = steel || TOUGH[k.kind];
+    const glass = k.kind === 'glass', phase = k.kind === 'phase';
     const shimmer = steel ? 0.12 * Math.sin(t * 1.7 + k.x * 0.025 - k.y * 0.01) : 0;
+    // стекло полупрозрачное, призрак тает почти до нуля
+    const fade = glass ? 0.6 : phase ? 0.1 + 0.9 * k.vis : 1;
+    R.fade(fade);
 
     const gi = R.gi;
 
     // мягкое свечение вокруг (при глобальном освещении его даёт собственный свет кирпича)
     if (!gi) { R.color(r, gg, b, steel ? 0.04 : 0.09, 1); R.soft(k.x, k.y, k.rad * 2.1 * s); }
 
-    // фаска: каждое ребро освещено по своей нормали
+    // фаска: каждое ребро освещено по своей нормали; бронированные рёбра — стальные
     for (let i = 0; i < n; i++) {
       const j = i + 1 < n ? i + 1 : 0;
       const ax = wo[i * 2], ay = wo[i * 2 + 1], bx = wo[j * 2], by = wo[j * 2 + 1];
       const ex = bx - ax, ey = by - ay, l = Math.hypot(ex, ey) || 1;
       const nx = (k.orient * ey) / l, ny = (-k.orient * ex) / l;
+      const plate = k.armor && k.armor[i];
+      const er = plate ? 0.6 : r, eg = plate ? 0.64 : gg, eb = plate ? 0.72 : b;
+      const d = nx * LX + ny * LY;
       if (gi) {
         // Та же светотень, что без освещения, только мягче, — кирпич остаётся объёмным даже в ровном свете.
         // Свет берём снаружи ребра, и шейдер добавит своё: фаска, обращённая к настоящему источнику, светлее.
-        const d = nx * LX + ny * LY;
         const sh = 0.72 + 0.4 * d + shimmer;
-        const hi = steel || k.kind === 'strong' ? 0.14 * Math.max(0, d) ** 2 : 0.05 * Math.max(0, d);
+        const hi = hardy || plate ? 0.14 * Math.max(0, d) ** 2 : 0.05 * Math.max(0, d);
         R.lit(LIT_BRICK, nx * 4, ny * 4, 1);
-        R.color(r * sh + hi, gg * sh + hi, b * sh + hi, 1);
+        R.color(er * sh + hi, eg * sh + hi, eb * sh + hi, 1);
       } else {
-        const d = nx * LX + ny * LY;
         const sh = 0.6 + 0.55 * d + shimmer;
-        const hi = steel || k.kind === 'strong' ? 0.22 * Math.max(0, d) ** 2 : 0.08 * Math.max(0, d);
-        R.color(r * sh + hi, gg * sh + hi, b * sh + hi, 1);
+        const hi = hardy || plate ? 0.22 * Math.max(0, d) ** 2 : 0.08 * Math.max(0, d);
+        R.color(er * sh + hi, eg * sh + hi, eb * sh + hi, 1);
       }
       R.quad(ax, ay, bx, by, wi[j * 2], wi[j * 2 + 1], wi[i * 2], wi[i * 2 + 1]);
     }
-    // грань
+    // грань (у стекла — ещё прозрачнее фаски)
+    if (glass) R.fade(0.32);
     if (gi) {
       R.lit(LIT_BRICK, 0, 0, 1);
       R.color(r * 0.8, gg * 0.8, b * 0.8, 1);
@@ -293,13 +319,30 @@
       R.color2(Math.min(1, r * 1.1 + 0.03), Math.min(1, gg * 1.1 + 0.03), Math.min(1, b * 1.1 + 0.03), 1);
       R.polyShade(wi, k.x, k.y, LX, LY, 0.2);
     }
+    R.fade(fade);
 
     // заклёпки у прочных/стальных
-    if ((steel || k.kind === 'strong') && n <= 8) {
+    if (hardy && n <= 8 && k.kind !== 'armor') {
       for (let i = 0; i < n; i++) {
         const x = U.lerp(k.x, wi[i * 2], 0.7), y = U.lerp(k.y, wi[i * 2 + 1], 0.7);
         R.color(0.05, 0.05, 0.08, 0.5); R.disc(x + 0.6, y + 0.8, 1.9 * s);
         R.color(0.9, 0.92, 1, 0.75); R.disc(x, y, 1.5 * s);
+      }
+    }
+    // броня: стальная полоса по ребру с заклёпками
+    if (k.armor) {
+      for (let i = 0; i < n; i++) {
+        if (!k.armor[i]) continue;
+        const j = i + 1 < n ? i + 1 : 0;
+        const ax = (wo[i * 2] + wi[i * 2]) / 2, ay = (wo[i * 2 + 1] + wi[i * 2 + 1]) / 2;
+        const bx = (wo[j * 2] + wi[j * 2]) / 2, by = (wo[j * 2 + 1] + wi[j * 2 + 1]) / 2;
+        R.color(0.85, 0.88, 0.95, 0.55); R.line(ax, ay, bx, by, 1.2);
+        if (Math.hypot(bx - ax, by - ay) < 14) continue;
+        for (const f of [0.25, 0.75]) {
+          const x = U.lerp(ax, bx, f), y = U.lerp(ay, by, f);
+          R.color(0.05, 0.05, 0.08, 0.5); R.disc(x + 0.5, y + 0.7, 1.7 * s);
+          R.color(0.92, 0.94, 1, 0.85); R.disc(x, y, 1.3 * s);
+        }
       }
     }
     if (k.kind === 'explosive') {
@@ -310,6 +353,41 @@
       R.color(0.2, 0.03, 0.02, 0.9); R.disc(k.x, k.y, k.rad * 0.36 * s);
       R.lit(0);
       R.color(1, 0.85 + 0.15 * pulse, 0.4, 1, 1); R.disc(k.x, k.y, k.rad * (0.12 + 0.06 * pulse) * s);
+      R.lit(gi ? LIT_BRICK : 0, 0, 0, 1);
+    }
+    // стекло: блик-отражение — две косые черты, не поворачиваются вместе с кирпичом
+    if (glass) {
+      const q = inradius(k) * s;
+      R.lit(0);
+      R.color(1, 1, 1, 0.5, 1);
+      R.line(k.x - q * 0.75, k.y + q * 0.1, k.x - q * 0.1, k.y - q * 0.75, 1.6);
+      R.color(1, 1, 1, 0.3, 1);
+      R.line(k.x - q * 0.25, k.y + q * 0.45, k.x + q * 0.35, k.y - q * 0.15, 1.2);
+      // по стеклу иногда пробегает искра
+      const u = (t * 0.4 + k.phase) % 3;
+      if (u < 1) { R.color(1, 1, 1, Math.sin(u * Math.PI) * 0.6, 1); R.soft(k.x + (u - 0.5) * q * 1.4, k.y - (u - 0.5) * q * 1.4, q * 0.7); }
+      R.lit(gi ? LIT_BRICK : 0, 0, 0, 1);
+    }
+    // живой: внутри бьётся зелёное сердце, по граням — жилки; раненый бьётся чаще, а с каждым заживлением
+    // сердце тускнеет — когда силы (k.sap) кончились, оно замирает
+    if (k.kind === 'regen') {
+      const v = 0.3 + 0.7 * k.sap / k.maxHp, p = k.sap > 0 ? beat(t * (k.hp < k.maxHp ? 1.6 : 0.9) + k.phase) : 0;
+      R.lit(0);
+      R.color(0.4, 1, 0.55, (0.22 + 0.32 * p) * v, 1);
+      for (let i = 0; i < n; i++) R.line(k.x, k.y, U.lerp(k.x, wi[i * 2], 0.8), U.lerp(k.y, wi[i * 2 + 1], 0.8), 1.1);
+      R.color(0.4, 1, 0.5, (0.25 + 0.45 * p) * v * (gi ? 0.6 : 1), 1); R.soft(k.x, k.y, inradius(k) * (1.3 + 0.3 * p) * s);
+      R.color(0.85, 1, 0.85, (0.5 + 0.5 * p) * v, 1); R.disc(k.x, k.y, (2 + 1.2 * p) * s);
+      R.lit(gi ? LIT_BRICK : 0, 0, 0, 1);
+    }
+    // кристалл: грани от центра к углам и звёздочка, перебегающая по углам
+    if (k.kind === 'crystal') {
+      R.lit(0);
+      R.color(1, 1, 1, 0.22, 1);
+      for (let i = 0; i < n; i++) R.line(k.x, k.y, wi[i * 2], wi[i * 2 + 1], 1);
+      const f = t * 1.3 + k.phase, i = Math.floor(f) % n, a = Math.sin((f % 1) * Math.PI);
+      const x = wi[i * 2], y = wi[i * 2 + 1], z = (3 + 5 * a) * s;
+      R.color(1, 1, 1, 0.9 * a, 1); R.line(x - z, y, x + z, y, 1.2); R.line(x, y - z, x, y + z, 1.2);
+      R.color(1, 1, 1, 0.5 * a, 1); R.soft(x, y, z * 1.2);
       R.lit(gi ? LIT_BRICK : 0, 0, 0, 1);
     }
     // трещины
@@ -325,7 +403,72 @@
       }
     }
     R.lit(0);
-    if (k.flash > 0) { R.color(1, 1, 1, k.flash * 0.65, 1); R.poly(wo); }
+    R.fade(1);
+    // призрак, пока его нет, выдаёт мерцающий контур — видно, где он появится
+    if (phase && k.vis < 1) {
+      const a = (1 - k.vis) * (0.25 + 0.15 * Math.sin(t * 9 + k.phase));
+      R.color(0.85, 0.8, 1, a, 1);
+      for (let i = 0; i < n; i++) {
+        const j = i + 1 < n ? i + 1 : 0;
+        const ax = wo[i * 2], ay = wo[i * 2 + 1], bx = wo[j * 2], by = wo[j * 2 + 1];
+        R.line(U.lerp(ax, bx, 0.2), U.lerp(ay, by, 0.2), U.lerp(ax, bx, 0.8), U.lerp(ay, by, 0.8), 1.4);
+      }
+    }
+    if (k.flash > 0) { R.color(1, 1, 1, k.flash * 0.65 * fade, 1); R.poly(wo); }
+  }
+
+  // ---------- Оснастка подвижных кирпичей ----------
+  // Нити маятников с точками подвеса, рельсы конвейеров и оси роторов и колец — то, на чём держатся кирпичи.
+  // Рисуется под кирпичами; оси, рельсы и подвесы остаются и тогда, когда всё, что на них было, разбито.
+  let rigFor = null, rig = null;
+  function buildRig(bricks) {
+    const pend = new Map(), tracks = new Map(), axles = new Map();
+    for (const k of bricks) {
+      const m = k.motion;
+      if (!m) continue;
+      if (m.type === 'swing') {
+        const key = m.px.toFixed(1) + ',' + m.py.toFixed(1);
+        if (!pend.has(key)) pend.set(key, { x: m.px, y: m.py, bricks: [] });
+        pend.get(key).bricks.push(k);
+      } else if (m.type === 'track') {
+        const key = [m.cx, m.cy, m.hl, m.r, m.rot].map(v => (v || 0).toFixed(1)).join();
+        if (tracks.has(key)) continue;
+        const pts = [], per = P.trackLen(m), o = {};
+        for (let i = 0; i <= 96; i++) { P.trackAt(m, (i / 96) * per, o); pts.push(o.x, o.y); }
+        tracks.set(key, pts);
+      } else if (m.type === 'orbit') {
+        axles.set(m.cx.toFixed(1) + ',' + m.cy.toFixed(1), [m.cx, m.cy]);
+      }
+    }
+    return { pend: [...pend.values()], tracks: [...tracks.values()], axles: [...axles.values()] };
+  }
+  function bolt(x, y, r) {
+    R.color(0.05, 0.06, 0.09, 0.6); R.disc(x + 1, y + 1.4, r * 1.15);
+    R.color(0.48, 0.53, 0.66, 1); R.disc(x, y, r);
+    R.color(0.1, 0.11, 0.16, 1); R.disc(x, y, r * 0.4);
+  }
+  function rigging(g) {
+    if (rigFor !== g.bricks) { rigFor = g.bricks; rig = buildRig(g.bricks); }
+    if (!rig.pend.length && !rig.tracks.length && !rig.axles.length) return;
+    R.lit(R.gi ? 1 : 0);
+    for (const pts of rig.tracks) {
+      for (const [w, c] of [[7, [0.06, 0.07, 0.11, 0.9]], [2, [0.32, 0.37, 0.5, 0.7]]]) {
+        R.color(c[0], c[1], c[2], c[3]);
+        for (let i = 0; i + 3 < pts.length; i += 2) R.line(pts[i], pts[i + 1], pts[i + 2], pts[i + 3], w);
+      }
+    }
+    // нить — до самого дальнего уцелевшего звена гирлянды
+    for (const pd of rig.pend) {
+      let far = null;
+      for (const k of pd.bricks) if (k.alive && (!far || k.motion.l > far.motion.l)) far = k;
+      if (far) {
+        R.color(0.05, 0.05, 0.08, 0.35); R.line(pd.x + 2, pd.y + 3, far.x + 2, far.y + 3, 2);
+        R.color(0.62, 0.66, 0.78, 0.9); R.line(pd.x, pd.y, far.x, far.y, 1.6);
+      }
+      bolt(pd.x, pd.y, 4.5);
+    }
+    for (const [x, y] of rig.axles) bolt(x, y, 6);
+    R.lit(0);
   }
 
   // ---------- Обломки ----------
@@ -624,8 +767,17 @@
       case 'laser': R.rect(x - 5, y - 2, 2, 7); R.rect(x + 3, y - 2, 2, 7); R.tri(x - 6.5, y - 2, x - 1.5, y - 2, x - 4, y - 6.5); R.tri(x + 1.5, y - 2, x + 6.5, y - 2, x + 4, y - 6.5); break;
       case 'fire': R.poly([x, y - 7, x + 4.5, y + 0.5, x, y + 5.5, x - 4.5, y + 0.5]); break;
       case 'life': R.rect(x - 5.5, y - 1.6, 11, 3.2); R.rect(x - 1.6, y - 5.5, 3.2, 11); break;
+      case 'fish': {
+        for (let i = 0; i < ICON_FISH.length; i += 2) { iconPts[i] = x + ICON_FISH[i]; iconPts[i + 1] = y + ICON_FISH[i + 1]; }
+        R.poly(iconPts); R.tri(x - 3, y, x - 8.5, y - 4, x - 8.5, y + 4);
+        R.color(0.1, 0.35, 0.35, 0.9); R.disc(x + 4, y - 0.8, 1);
+        break;
+      }
     }
   }
+  const ICON_FISH = [];
+  for (let i = 0; i < 10; i++) { const a = (i / 10) * U.TAU; ICON_FISH.push(1.5 + 5.5 * Math.cos(a), 3.6 * Math.sin(a)); }
+  const iconPts = new Float32Array(ICON_FISH.length);
   function powerups(g, t) {
     for (const u of g.powerups) {
       const c = g.PU_COLORS[u.type];
@@ -710,18 +862,22 @@
       AK.Show.update(g, t);
       if (R.beginGI(sx, sy)) { giScene(g, t); R.endGI(SKY); }
       R.topLights(R.gi ? spotLights(g) : []);
-      R.water(Wt.on ? Wt.frame() : null, spotLights(g), hullInWater(g));
+      R.water(Wt.on ? Wt.frame() : null, hullInWater(g));
       R.begin(t, sx, sy, g.lv.c1, g.lv.c2);
       if (Wt.on) wetSpots();
       gravityGrid(g);
       spotBeams(g);
       if (!R.gi) shadows(g); // при глобальном освещении тени настоящие
       lureRings(g, t);
+      rigging(g);
+      AK.Seabed.draw(false);
       if (g.boss) g.boss.under(t);
       for (const k of g.bricks) if (k.alive) brick(g, k, t);
       debris(g);
       if (g.boss) g.boss.over(t);
       powerups(g, t);
+      for (const f of g.fishes) f.draw(underWater);
+      AK.Seabed.draw(true);
       magnetFx(g, t);
       paddle(g, t);
       if (Wt.on) paddleWater(g);

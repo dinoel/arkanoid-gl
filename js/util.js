@@ -8,6 +8,18 @@ window.AK = window.AK || {};
   U.lerp = (a, b, t) => a + (b - a) * t;
   U.smooth = t => t * t * (3 - 2 * t);
   U.sign = x => (x < 0 ? -1 : 1);
+  // Цвет тонкой плёнки (перламутр, чешуя, мыльный пузырь) при разности хода t, в периодах: радуга по кругу;
+  // пишет в out
+  U.film = function (t, out) {
+    for (let i = 0; i < 3; i++) out[i] = 0.5 + 0.5 * Math.cos(U.TAU * (t - i / 3));
+    return out;
+  };
+  // Блики света, прошедшего сквозь рябь на поверхности воды, в точке (x, y) в момент t: 0…1, яркие полосы бегут
+  U.caustic = function (x, y, t) {
+    const a = Math.sin(x * 0.11 + y * 0.03 + t * 2.3), b = Math.sin(y * 0.13 - x * 0.05 - t * 1.7);
+    const c = 0.5 + 0.25 * (a + b);
+    return c * c;
+  };
 
   // Детерминированный ГПСЧ (mulberry32) с удобными помощниками.
   U.rng = function (seed) {

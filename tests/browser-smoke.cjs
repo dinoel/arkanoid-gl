@@ -46,7 +46,9 @@ async function connect(url) {
 
 (async () => {
   let child, tab;
-  const killTimer = setTimeout(() => { if (child) child.kill(); server.close(); process.exitCode = 1; }, 180000);
+  const killTimer = setTimeout(() => {
+    console.error('FAIL: timed out after 5 minutes'); if (child) child.kill(); server.close(); process.exitCode = 1;
+  }, 300000);
   try {
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     const base = `http://127.0.0.1:${server.address().port}`;
@@ -107,13 +109,18 @@ async function connect(url) {
 
     await tab.send('Page.navigate', { url: base + '/index.html?seed=2026' }); await ready('/index.html');
     await evaluate("document.getElementById('overlay').dispatchEvent(new PointerEvent('pointerdown', {bubbles:true}))");
-    await evaluate('new Promise(resolve => setTimeout(resolve, 800))');
-    const game = await evaluate(`(() => {
-      const M = AK.Music, G = AK.G;
-      G.combo = 12; G.pw.fire = 8; AK.UI.intensity();
-      return { ready: AK.A.ready, state: G.state, energy: M.state().targetIntensity,
-        clock: M.clock(AK.A.now()), spots: G.spots.map(q => ({e:q.e, a:q.a, c:q.c})), glError: document.getElementById('err').textContent };
-    })()`);
+    // Под программным WebGL страница после старта может подвиснуть на десятки секунд, и планировщик музыки
+    // догоняет время не сразу: ждём, пока пойдут часы песни, и проверяем в тот же момент
+    const game = await evaluate(`new Promise(resolve => {
+      const M = AK.Music, G = AK.G, t0 = performance.now();
+      (function poll() {
+        const clock = AK.A.ready ? M.clock(AK.A.now()) : null;
+        if (!clock && performance.now() - t0 < 90000) { setTimeout(poll, 50); return; }
+        G.combo = 12; G.pw.fire = 8; AK.UI.intensity();
+        resolve({ ready: AK.A.ready, state: G.state, energy: M.state().targetIntensity,
+          clock, spots: G.spots.map(q => ({e:q.e, a:q.a, c:q.c})), glError: document.getElementById('err').textContent });
+      })();
+    })`);
     assert.ok(game.ready && game.clock && game.energy > 0.7, 'game audio and intensity');
     assert.ok(game.spots.length && game.spots.every(s => Number.isFinite(s.e) && Number.isFinite(s.a) && s.c.every(Number.isFinite)), 'finite animated spotlights');
     assert.equal(tab.events.length, 0, JSON.stringify(tab.events));

@@ -33,12 +33,14 @@
   let timer = null, running = false, hotBars = 0, calmBars = 0;
 
   // ---------- Стили ----------
+  // live — доля песен с живыми ударными (записи вместо синтеза; бочка всегда синтез). piano, marimba, vibes,
+  // kalimba, sax — записанные инструменты (music-samples.js)
   const PAL = {
     synthwave: {
       bpm: [98, 114], swing: [0, 0.03], modes: [['aeolian', 3], ['dorian', 2], ['harmonic', 1], ['lydian', 0.4]],
-      drums: [['four', 2], ['break', 2], ['half', 0.8]], kick: 'punch', snare: [['snare', 2], ['clap', 1]],
+      drums: [['four', 2], ['break', 2], ['half', 0.8]], kick: 'punch', snare: [['snare', 2], ['clap', 1]], live: 0.45,
       bass: [['rolling', 3], ['offbeat', 1.5], ['synco', 2], ['gallop', 1.2]], bassTone: [['saw', 3], ['pluck', 1.5], ['fm', 1]],
-      arp: [['pluck', 3], ['piano', 1], ['glass', 1]], lead: [['supersaw', 4], ['piano', 1], ['sine', 1]],
+      arp: [['pluck', 3], ['piano', 1], ['glass', 1]], lead: [['supersaw', 4], ['sax', 1.6], ['piano', 1], ['sine', 1]],
       pad: [['saw', 3], ['string', 2]], stab: [['saw', 1], ['epiano', 0.4]],
       ext: [['triad', 3], ['seven', 2], ['add9', 1.5], ['sus2', 1]], leadP: 0.7,
     },
@@ -52,17 +54,18 @@
     },
     dnb: {
       bpm: [164, 174], swing: [0, 0.02], modes: [['aeolian', 2], ['dorian', 2], ['harmonic', 1]],
-      drums: [['dnb', 4], ['half', 1]], kick: 'punch', snare: [['snare', 3]],
+      drums: [['dnb', 4], ['half', 1]], kick: 'punch', snare: [['snare', 3]], live: 0.7,
       bass: [['long', 3], ['synco', 2], ['808', 0.8]], bassTone: [['reese', 4], ['sub', 1.5], ['fm', 1]],
-      arp: [['piano', 2], ['glass', 2], ['pluck', 1]], lead: [['piano', 2], ['epiano', 1.5], ['supersaw', 1]],
+      arp: [['piano', 2], ['glass', 2], ['vibes', 1.5], ['pluck', 1]], lead: [['piano', 2], ['epiano', 1.5], ['supersaw', 1]],
       pad: [['string', 2], ['glass', 2]], stab: [['epiano', 1]],
       ext: [['seven', 3], ['add9', 2], ['triad', 1]], leadP: 0.6,
     },
     lofi: {
       bpm: [76, 90], swing: [0.08, 0.16], modes: [['dorian', 3], ['aeolian', 2], ['lydian', 0.8], ['mixolydian', 0.8]],
-      drums: [['boom', 4], ['half', 1]], kick: 'soft', snare: [['snare', 2], ['rim', 1]],
+      drums: [['boom', 4], ['half', 1]], kick: 'soft', snare: [['snare', 2], ['rim', 1]], live: 1,
       bass: [['walking', 2], ['synco', 2], ['long', 1]], bassTone: [['sub', 2], ['pluck', 1], ['fm', 1]],
-      arp: [['marimba', 1], ['epiano', 3], ['piano', 2]], lead: [['epiano', 3], ['piano', 3]],
+      arp: [['marimba', 1], ['vibes', 2], ['kalimba', 1.2], ['epiano', 3], ['piano', 2]],
+      lead: [['epiano', 3], ['piano', 3], ['vibes', 1], ['sax', 1]],
       pad: [['organ', 1], ['glass', 1]], stab: [['epiano', 4]],
       ext: [['seven', 4], ['add9', 2], ['sus2', 1]], leadP: 0.6,
     },
@@ -70,7 +73,7 @@
       bpm: [136, 150], swing: [0, 0.04], modes: [['harmonic', 2], ['phrygian', 2], ['aeolian', 2]],
       drums: [['half', 5]], kick: 'punch', snare: [['clap', 2], ['snare', 1]],
       bass: [['808', 5]], bassTone: [['808', 5]],
-      arp: [['bell', 2], ['piano', 2]], lead: [['piano', 3], ['fm', 1], ['sine', 1]],
+      arp: [['bell', 2], ['piano', 2], ['kalimba', 1.5], ['marimba', 1]], lead: [['piano', 3], ['fm', 1], ['sine', 1]],
       pad: [['glass', 2], ['string', 1]], stab: [['epiano', 0.5]],
       ext: [['triad', 3], ['seven', 1]], leadP: 0.7,
     },
@@ -192,6 +195,9 @@
       stab: r.weighted(pal.stab), lead: r.weighted(pal.lead), snare: r.weighted(pal.snare),
       percF: r.pick([520, 680, 800, 1040]), stabR: r.pick(STABS),
     };
+    song.kit.live = r.chance(pal.live || 0);
+    S.liveDrums(song.kit.live);
+    want(pal);
     const bassStyle = r.weighted(pal.bass);
     song.theme = {
       prog: MG.progression(r, 4, pal.ext, song.mode), motif: MG.motif(r, song.palName === 'techno' ? 0.35 : 0.65, song.palName), phrases: {},
@@ -206,6 +212,9 @@
     activate(makeSection('intro', null), song.nextT);
     return song.seed;
   };
+
+  // Записи инструментов палитры грузятся заранее, пока они не нужны
+  const want = p => S.want([...p.arp, ...p.lead, ...p.stab].map(k => k[0]));
 
   // Куда модулировать. Сама смена тональности готовится связкой в конце секции.
   function modTarget() {
@@ -261,6 +270,7 @@
         const others = Object.keys(PAL).filter(n => n !== song.palName && n !== 'chip');
         song.tpalName = r.chance(0.6) ? r.pick(others) : null; // дрейф тембров
         song.tpal = song.tpalName ? PAL[song.tpalName] : null;
+        if (song.tpal) want(song.tpal);
       }
       if (type !== 'drop' && r.chance(song.tpal ? 0.5 : 0.3)) swapKit();
     }

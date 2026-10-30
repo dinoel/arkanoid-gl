@@ -14,14 +14,16 @@
   // поймать ракеткой. За каждый пойманный — очки, а поимки подряд, без долгих пауз, их умножают.
   const SHARD_G = 1000, SHARD_DRAG = 2.6;     // скорость падения выходит на SHARD_G / SHARD_DRAG ≈ 385 px/s
   const SHARD_FADE = 0.6;                     // с, за сколько гаснет осколок, улёгшийся на кирпич
-  const SHARD_PTS = { normal: 10, strong: 15, explosive: 20 };
+  const SHARD_PTS = { normal: 10, strong: 15, explosive: 20, glass: 5, armor: 15, regen: 15, crystal: 30, phase: 15 };
   const STREAK_GAP = 1.2;                     // с между поимками, после которых серия прерывается
   const STREAK_MAX = 3;                       // предельный множитель серии
   // Притяжение кирпичей по закону всемирного тяготения. Масса = площадь × плотность материала;
   // постоянная подобрана так, чтобы у ракетки поле полного уровня было около 280 px/s², а у стальных
   // кирпичей мяч, пролетая вплотную, сворачивал на десятки градусов.
   const GCONST = 800;
-  const DENSITY = { normal: 0.8, explosive: 0.6, steel: 6 }; // прочные: 0.8 + 0.5 за каждую единицу прочности
+  const DENSITY = { normal: 0.8, explosive: 0.6, steel: 6, glass: 0.45, crystal: 1.4, phase: 0.5 }; // прочные, живые
+                              // и бронированные: 0.8 + 0.5 за каждую единицу прочности
+  const TOUGH = { strong: 1, regen: 1, armor: 1 };
   // Удары выбивают из стали массу: m *= exp(-j / STEEL_WEAR), j — импульс удара. Обычный удар уносит
   // несколько процентов, а мяч, улёгшийся в ямку между стальными кирпичами, своим давлением стачивает её
   // за пару секунд и выкатывается.
@@ -64,6 +66,12 @@
   // проходит безнаказанно. Оттаяв, ракетка осыпается крошкой и ещё STONE_IMM с не каменеет снова.
   const STONE = 2, STONE_IMM = 1, STONE_DRAFT = 5, STARE = 0.3;
   const SHOT_R = { fire: 9, spore: 7, dart: 6 };
+  // Особые кирпичи (levelgen.js). Живой, если его не добить за REGEN_T с, зарастает одной трещиной, и так до
+  // целого, но всего он зарастает не больше maxHp раз (k.sap): иначе последний живой кирпич, по которому мяч
+  // попадает реже раза в REGEN_T с (приманка тянет мяч лишь через LURE_T0), не добить никогда. Призрак PHASE_ON с виден, за PHASE_FADE гаснет, PHASE_OFF с его нет — мяч проходит насквозь, — и так
+  // же проявляется; твердеет он, только когда в нём нет мяча.
+  const REGEN_T = 3.2;
+  const PHASE_ON = 3.4, PHASE_FADE = 0.45, PHASE_OFF = 1.7, PHASE_T = PHASE_ON + PHASE_OFF + 2 * PHASE_FADE;
   const ZONE_B = AK.LevelGen.bounds.B;
 
   const G = {
@@ -74,7 +82,7 @@
     score: 0, lives: 3, level: 1, seed: 1, combo: 0, prevGen: null,
     shake: 0, flash: 0, aberr: 0,
     bricks: [], balls: [], debris: [], particles: [], powerups: [], lasers: [], waves: [], explQ: [], popups: [],
-    shots: [], boss: null,
+    shots: [], boss: null, fishes: [],
     streak: { n: 0, t: -9 },
     pw: { expand: 0, slow: 0, laser: 0, fire: 0 },
     input: { x: W / 2, fire: false, held: false },
@@ -94,9 +102,10 @@
       bx: s.x, by: s.y, bang: s.ang || 0, x: s.x, y: s.y, ang: s.ang || 0, vx: 0, vy: 0, w: 0,
       motion: s.motion || null, kind: s.kind, hp: s.hp, maxHp: s.hp, color: s.color, note: s.note,
       flash: 0, cracks: [], alive: true, dirty: true, phase: Math.random() * TAU, boss: s.boss || null,
+      armor: s.armor || null, heal: 0, sap: s.hp, vis: 1, phOff: s.phOff || 0,
     };
     const area = s.circle ? Math.PI * s.circle * s.circle : Math.abs(P.signedArea(local));
-    b.mass = b.mass0 = area * (s.density || (s.kind === 'strong' ? 0.8 + 0.5 * s.hp : DENSITY[s.kind]));
+    b.mass = b.mass0 = area * (s.density || (TOUGH[s.kind] ? 0.8 + 0.5 * s.hp : DENSITY[s.kind]));
     b.gm = GCONST * b.mass;
     b.soft2 = (0.5 * b.rad) ** 2;
     pose(b, 0);
@@ -134,20 +143,8 @@
   G.toggleGravity = () => { G.gravity = !G.gravity; return G.gravity; };
 
   function pose(b, t) {
-    const m = b.motion;
-    if (m) {
-      if (m.type === 'orbit') {
-        const th = m.a0 + m.w * t;
-        b.x = m.cx + m.r * Math.cos(th); b.y = m.cy + m.r * Math.sin(th);
-        b.ang = b.bang + m.w * t; b.w = m.w;
-        b.vx = -m.w * (b.y - m.cy); b.vy = m.w * (b.x - m.cx);
-      } else if (m.type === 'slide') {
-        const ph = m.f * t + m.ph;
-        b.x = b.bx + m.amp * Math.sin(ph); b.vx = m.amp * m.f * Math.cos(ph);
-      } else if (m.type === 'spin') {
-        b.ang = b.bang + m.w * t; b.w = m.w;
-      }
-    } else if (!b.dirty) return;
+    if (b.motion) P.pose(b.motion, b.bx, b.by, b.bang, t, b);
+    else if (!b.dirty) return;
     b.dirty = false;
     P.transform(b.local, b.x, b.y, b.ang, b.world);
     P.transform(b.inset, b.x, b.y, b.ang, b.worldIn);
@@ -201,7 +198,9 @@
     G.demo = !!demo; G.seed = seed;
     G.level = Math.max(1, level | 0); G.score = 0; G.lives = 3; G.prevGen = null; G.paused = false;
     G.paddle = newPaddle();
+    G.fishes = [];
     G.startLevel();
+    spawnFish(); // рыбки живут в воде всегда; бонус делает одну из них золотой
   };
 
   G.startLevel = function () {
@@ -218,9 +217,11 @@
     G.magnet = 0;
     G.levelTime = 0; G.combo = 0; G.acc = 0;
     Wt.reset();
+    AK.Seabed.reset();
     if (!G.paddle) G.paddle = newPaddle();
     resetPowers();
     serve();
+    for (const f of G.fishes) f.reset();
     G.state = 'serve';
     A.newSong(lv.rng);
     if (G.demo) return;
@@ -329,10 +330,33 @@
     }
   }
 
-  const SCORE = { normal: 50, strong: 60, explosive: 100, steel: 0 };
+  const SCORE = { normal: 50, strong: 60, explosive: 100, steel: 0, glass: 30, armor: 70, regen: 60, crystal: 150, phase: 80 };
+
+  // Ребро кирпича, о которое пришёлся удар с нормалью (nx, ny): то, чья внешняя нормаль к ней ближе всего
+  function edgeOf(k, nx, ny) {
+    const w = k.world, n = k.n;
+    let best = 0, bd = -2;
+    for (let i = 0; i < n; i++) {
+      const j = i + 1 < n ? i + 1 : 0;
+      const ex = w[j * 2] - w[i * 2], ey = w[j * 2 + 1] - w[i * 2 + 1], l = Math.hypot(ex, ey) || 1;
+      const d = (k.orient * (ey * nx - ex * ny)) / l;
+      if (d > bd) { bd = d; best = i; }
+    }
+    return best;
+  }
+  // Удар пришёлся в броню (сталь — вся броня)
+  const armored = (k, nx, ny) => k.kind === 'steel' || (k.armor !== null && k.armor[edgeOf(k, nx, ny)]);
+  // Мяч или лазер попал в броню: звон и искры, кирпич цел
+  function armorHit(k, px, py, power, nx, ny, ball) {
+    k.flash = 0.6;
+    if (ball && ball.wet > 0) Wt.spray(px, py, nx, ny, ball.wet);
+    sfx('steel', power, pan(px));
+    sparks(px, py, 7, [0.8, 0.9, 1], 380, nx, ny, 0.9);
+  }
 
   function damageBrick(k, dmg, px, py, ivx, ivy, power, nx, ny, ball) {
     k.flash = 1;
+    k.heal = 0;
     if (ball && ball.wet > 0) Wt.spray(px, py, nx, ny, ball.wet);
     if (k.kind === 'steel') {
       k.mass *= Math.exp(-power / STEEL_WEAR);
@@ -358,14 +382,39 @@
     if (!k.alive) return;
     k.alive = false;
     unlure();
-    const base = SCORE[k.kind] * (k.kind === 'strong' ? k.maxHp : 1);
+    const base = SCORE[k.kind] * (TOUGH[k.kind] ? k.maxHp : 1);
     G.score += Math.round((base * (1 + G.combo * 0.15)) / 10) * 10;
     spawnDebris(k, ivx, ivy);
     sparks(k.x, k.y, 10, k.color, 260);
     puff(k.x, k.y, k.color, k.rad * 2.2, 0.3);
-    if (!quiet) sfx('brickBreak', note != null ? note : k.note, power, pan(k.x), k.maxHp > 1);
+    if (k.kind === 'glass') sparks(k.x, k.y, 16, [0.9, 0.97, 1], 340);
+    if (k.kind === 'crystal') { sparks(k.x, k.y, 22, U.hsl(G.time * 0.3, 0.9, 0.7), 420); puff(k.x, k.y, [1, 1, 1], k.rad * 3, 0.35); }
+    if (!quiet) {
+      if (k.kind === 'glass') sfx('glass', power, pan(k.x));
+      else sfx('brickBreak', note != null ? note : k.note, power, pan(k.x), k.maxHp > 1);
+      if (k.kind === 'crystal') sfx('chime', pan(k.x));
+    }
     if (k.kind === 'explosive') G.explQ.push({ x: k.x, y: k.y, t: 0.07 });
     maybeDrop(k);
+  }
+
+  // Живой кирпич зарастает трещиной
+  function healBrick(k) {
+    k.heal = 0; k.hp++; k.sap--;
+    k.cracks.splice(0, 2);
+    if (k.hp >= k.maxHp) k.cracks.length = 0;
+    sparks(k.x, k.y, 8, [0.45, 1, 0.55], 150);
+    puff(k.x, k.y, [0.35, 1, 0.5], k.rad * 2, 0.4);
+    sfx('heal', pan(k.x));
+  }
+  // Призрак: видимость vis по циклу; ghost — мяч проходит сквозь него
+  function phaseBrick(k) {
+    let c = (G.levelTime + k.phOff) % PHASE_T;
+    k.vis = c < PHASE_ON ? 1 : (c -= PHASE_ON) < PHASE_FADE ? 1 - c / PHASE_FADE : (c -= PHASE_FADE) < PHASE_OFF ? 0 : (c - PHASE_OFF) / PHASE_FADE;
+    const solid = k.vis > 0.5;
+    if (solid === !k.ghost) return;
+    if (solid && G.balls.some(b => !b.stuck && (k.circle ? P.circleVsCircle(b.x, b.y, b.r + 2, k.x, k.y, k.circle) : P.circleVsPoly(b.x, b.y, b.r + 2, k.world, k.orient)))) return;
+    k.ghost = !solid;
   }
 
   function spawnDebris(k, ivx, ivy) {
@@ -395,14 +444,15 @@
   }
 
   // ---------- Бонусы ----------
-  const PU = [['expand', 3], ['multi', 3], ['slow', 2], ['laser', 2.2], ['fire', 1.4], ['life', 0.6]];
+  const PU = [['expand', 3], ['multi', 3], ['slow', 2], ['laser', 2.2], ['fire', 1.4], ['life', 0.6], ['fish', 3]];
   G.PU_COLORS = {
     expand: [0.3, 0.6, 1], multi: [1, 0.85, 0.25], slow: [0.35, 1, 0.55],
-    laser: [1, 0.3, 0.35], fire: [1, 0.55, 0.12], life: [1, 0.45, 0.85],
+    laser: [1, 0.3, 0.35], fire: [1, 0.55, 0.12], life: [1, 0.45, 0.85], fish: [0.2, 0.95, 0.85],
   };
   function maybeDrop(k) {
-    const chance = k.maxHp > 1 ? 0.22 : 0.12;
-    if (Math.random() > chance || G.powerups.length > 5) return;
+    const gem = k.kind === 'crystal';
+    const chance = gem ? 1 : k.maxHp > 1 ? 0.22 : 0.12;
+    if (Math.random() > chance || (G.powerups.length > 5 && !gem)) return;
     G.powerups.push({ type: weighted(PU), x: k.x, y: k.y, vx: k.vx * 0.5 + rand(-30, 30), vy: -90, a: 0, t: 0 });
   }
   function weighted(items) {
@@ -419,6 +469,7 @@
       case 'laser': G.pw.laser = 12; break;
       case 'fire': G.pw.fire = 9; break;
       case 'life': G.lives = Math.min(G.lives + 1, 6); break;
+      case 'fish': addFish(); break;
       case 'multi': {
         const add = [];
         for (const b of G.balls) {
@@ -550,9 +601,10 @@
     if (b.x + b.r > RX) { b.x = RX - b.r; hitBallWall(b, -1, 0, RX, b.y); }
     if (b.y - b.r < T) { b.y = T + b.r; hitBallWall(b, 0, 1, b.x, T); }
 
-    // ракетка: капсула с выпуклой верхней поверхностью
+    // ракетка: капсула с выпуклой верхней поверхностью. Мяч, выплюнутый рыбкой, проходит её снизу насквозь.
     const p = G.paddle;
-    if (b.y + b.r > p.y - p.r - 2 && b.y - b.r < p.y + p.r + 2) {
+    if (b.rise && b.y + b.r < p.y - p.r - 2) b.rise = false;
+    if (!b.rise && b.y + b.r > p.y - p.r - 2 && b.y - b.r < p.y + p.r + 2) {
       const h = P.circleVsCapsule(b.x, b.y, b.r, p.x, p.y, p.hw, p.r);
       if (h) {
         const hnx = h.nx, hny = h.ny, hpx = h.px, hpy = h.py;
@@ -589,14 +641,16 @@
       const h = k.circle ? P.circleVsCircle(b.x, b.y, b.r, k.x, k.y, k.circle) : P.circleVsPoly(b.x, b.y, b.r, k.world, k.orient);
       if (!h) continue;
       const nx = h.nx, ny = h.ny, px = h.px, py = h.py, pen = h.pen;
-      if (fireOn && k.kind !== 'steel') {
-        damageBrick(k, 99, px, py, b.vx, b.vy, 700, nx, ny, b);
+      const hard = armored(k, nx, ny);
+      // огненный мяч прожигает всё, кроме брони; стекло мяч бьёт с налёта и летит дальше
+      if (!hard && (fireOn || k.kind === 'glass')) {
+        damageBrick(k, 99, px, py, b.vx, b.vy, fireOn ? 700 : Math.hypot(b.vx, b.vy), nx, ny, b);
         continue;
       }
       b.x += nx * pen; b.y += ny * pen;
       const cvx = k.vx - k.w * (py - k.y), cvy = k.vy + k.w * (px - k.x);
       let j = 0;
-      if (k.kind === 'steel') {
+      if (hard) {
         // Грани стали неровные (заклёпки, сколы): нормаль удара слегка гуляет. Это перемешивает горизонтальное
         // и вертикальное движение — иначе в прямоугольном стальном кармане, куда мяч прижимает притяжение,
         // он мог бы вечно летать по одной линии.
@@ -604,7 +658,10 @@
         j = P.resolve(b, b.r, nx * c - ny * s, nx * s + ny * c, cvx, cvy, 0.97, 0.22, 0.4);
       }
       if (!j) j = P.resolve(b, b.r, nx, ny, cvx, cvy, 0.97, 0.22, 0.4);
-      if (j > 0) damageBrick(k, 1, px, py, b.vx, b.vy, j, nx, ny, b);
+      if (j > 0) {
+        if (hard && k.kind !== 'steel') armorHit(k, px, py, j, nx, ny, b);
+        else damageBrick(k, 1, px, py, b.vx, b.vy, j, nx, ny, b);
+      }
     }
   }
 
@@ -801,6 +858,22 @@
     G.powerups = G.powerups.filter(u => !u.dead);
   }
 
+  // ---------- Рыбка ----------
+  // Рыбок две: вид сбоку — в fish.js, вид сверху — в fish-top.js; водоросли — в seabed.js; здесь — чем рыбки
+  // действуют на игру
+  const fishApi = { sfx, pan, sparks, targetSpeed };
+  function spawnFish() { G.fishes = [AK.FishTop.spawn(G, fishApi), AK.Fish.spawn(G, fishApi)]; }
+  // Бонус золотит одну рыбку, наугад; если одна уже золотая — добавляет время ей
+  function addFish() {
+    if (!G.fishes.length) spawnFish();
+    const f = G.fishes.find(f => f.left > 0) || G.fishes[(Math.random() * G.fishes.length) | 0];
+    f.add();
+  }
+  function updateFish(dt) {
+    for (const f of G.fishes) f.update(dt);
+    AK.Seabed.update(dt, G);
+  }
+
   function updateLasers(dt) {
     for (const z of G.lasers) {
       for (let s = 0; s < 3 && !z.dead; s++) {
@@ -817,7 +890,8 @@
           const h = k.circle ? P.circleVsCircle(z.x, z.y, 3, k.x, k.y, k.circle) : P.circleVsPoly(z.x, z.y, 3, k.world, k.orient);
           if (!h) continue;
           z.dead = true;
-          damageBrick(k, 1, h.px, h.py, 0, -400, 500, h.nx, h.ny);
+          if (k.armor && armored(k, h.nx, h.ny)) armorHit(k, h.px, h.py, 500, h.nx, h.ny);
+          else damageBrick(k, 1, h.px, h.py, 0, -400, 500, h.nx, h.ny);
           sparks(z.x, z.y, 6, [1, 0.4, 0.4], 260, 0, 1, 1.2);
           break;
         }
@@ -970,6 +1044,8 @@
       if (!k.alive) continue;
       if (k.motion) pose(k, G.levelTime);
       k.flash = Math.max(0, k.flash - dt * 5);
+      if (k.kind === 'phase') phaseBrick(k);
+      else if (k.kind === 'regen' && k.sap > 0 && k.hp < k.maxHp && (k.heal += dt) >= REGEN_T) healBrick(k);
       if (k.kind !== 'steel') rem++;
     }
     // приманка растёт со временем без попаданий и быстро спадает после попадания
@@ -984,8 +1060,9 @@
     G.phiRef = pulled() ? G.potential(W / 2, PADDLE_Y, G.gravity, true) : 0;
     for (const b of G.balls) updateBall(b, dt);
     ballBall();
+    updateFish(dt);
     G.balls = G.balls.filter(b => !b.dead);
-    if (!G.balls.length && G.state !== 'clear') loseLife();
+    if (!G.balls.length && G.state !== 'clear' && !G.fishes.some(f => f.hold)) loseLife();
 
     for (const e of G.explQ) { e.t -= dt; if (e.t <= 0) { e.done = true; explode(e.x, e.y); } }
     G.explQ = G.explQ.filter(e => !e.done);

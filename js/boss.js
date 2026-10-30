@@ -20,6 +20,9 @@
   const KILL_GAP = 0.06;  // с: между вспышками кирпичей поверженного босса
   const CLEAR = 150;      // px: ближе этого к ракетке нижний край босса в пике не опускается
   const DIVE_K = 2.2;     // 1/с: жёсткость пружины, которая ведёт босса вниз и обратно
+  // Размер боссов: формы кирпичей, их места на скелете, верёвки и рисунок заданы ниже в единицах босса,
+  // на поле они в SZ раз больше. Пределы полёта по полю — уже в пикселях, под этот размер.
+  const SZ = 1.15;
   const wrap = a => a - TAU * Math.round(a / TAU);
   const shade = (c, k) => [Math.min(1, c[0] * k), Math.min(1, c[1] * k), Math.min(1, c[2] * k)];
   const lighter = (c, k) => [lerp(c[0], 1, k), lerp(c[1], 1, k), lerp(c[2], 1, k)];
@@ -39,7 +42,7 @@
     };
   }
   function part(bs, role, local, kind, hp, color, o = {}) {
-    bs.specs.push({ local, x: 360, y: 300, ang: 0, kind, hp, color, note: o.note ?? 5, circle: o.circle || 0,
+    bs.specs.push({ local: local.map(v => v * SZ), x: 360, y: 300, ang: 0, kind, hp, color, note: o.note ?? 5, circle: (o.circle || 0) * SZ,
       motion: { type: 'boss' }, boss: role, density: o.density });
     const m = {};
     bs.meta.push(m);
@@ -225,9 +228,10 @@
     return out;
   }
 
-  // Верёвка из n звеньев длиной len (схема Верле): висит на (ax, ay), её тянет сила (gx, gy) и раскачивает
-  // поперёк волна амплитуды amp — щупальца медузы и хвост ската
+  // Верёвка из n звеньев длиной len (в единицах босса; схема Верле): висит на (ax, ay), её тянет сила (gx, gy)
+  // и раскачивает поперёк волна амплитуды amp — щупальца медузы и хвост ската
   function rope(n, len, ax, ay) {
+    len *= SZ;
     const r = { n, len, x: [], y: [], px: [], py: [] };
     for (let j = 0; j <= n; j++) { r.x.push(ax); r.y.push(ay + j * len); r.px.push(ax); r.py.push(ay + j * len); }
     return r;
@@ -338,14 +342,14 @@
       const u = i / (n - 1), s = lerp(1, 0.5, u), a = 10 * s + 3, b = 15 * s + 5, strong = i % 4 === 1;
       const m = part(bs, 'seg', [a, 0, a * 0.45, b, -a * 0.45, b, -a, 0, -a * 0.45, -b, a * 0.45, -b],
         strong ? 'strong' : 'normal', strong ? 2 : 1, U.hsl(hue + 0.13 * u, 0.85, i % 2 ? 0.5 : 0.58), { note: 9 - Math.round(u * 6) });
-      m.a = a; m.b = b;
+      m.a = a * SZ; m.b = b * SZ;
     }
     bs.h = trail(); bs.hx = 360; bs.hy = 280; bs.hd = rng.range(0, TAU); bs.speed = 150;
     for (let i = 0; i < 600; i++) headStep(bs, 1 / 60); // проползает 10 с заранее: тело уже лежит на следе
     bs.bound = () => { bs.segs = bs.parts.filter(k => k.boss === 'seg'); };
     const at = (k, lx, ly, out) => {
       const c = Math.cos(k.ang), s = Math.sin(k.ang), q = k.show;
-      out[0] = k.x + (lx * c - ly * s) * q; out[1] = k.y + (lx * s + ly * c) * q;
+      out[0] = k.x + (lx * c - ly * s) * q * SZ; out[1] = k.y + (lx * s + ly * c) * q * SZ;
       return out;
     };
     const pa = [0, 0], pb = [0, 0];
@@ -355,13 +359,13 @@
       headStep(bs, dt);
       const h = bs.core, rc = bs.recoil * 9;
       h.tx = bs.hx - Math.cos(bs.hd) * rc; h.ty = bs.hy - Math.sin(bs.hd) * rc; h.ta = bs.hd;
-      let want = 16;
+      let want = 16 * SZ;
       for (const k of bs.segs) {
         if (!k.alive) continue;
         want += k.m.a + 2;
         k.m.d = k.m.d === undefined ? want : k.m.d + (want - k.m.d) * (1 - Math.exp(-dt * 3));
         trailAt(bs.h, k.m.d, tp);
-        const wig = 4.5 * Math.sin(bs.t * 4.2 - k.m.d * 0.05) * Math.min(1, k.m.d / 120) + (bs.dying ? (Math.random() - 0.5) * 6 : 0);
+        const wig = 4.5 * SZ * Math.sin(bs.t * 4.2 - k.m.d * 0.05) * Math.min(1, k.m.d / 120) + (bs.dying ? (Math.random() - 0.5) * 6 : 0);
         k.tx = tp[0] - Math.sin(tp[2]) * wig; k.ty = tp[1] + Math.cos(tp[2]) * wig; k.ta = tp[2];
         want += k.m.a + 2;
       }
@@ -422,8 +426,8 @@
       for (const k of bs.segs) if (k.alive && !k.ghost) last = k;
       if (last) {
         for (let j = 0; j < 7; j++) {
-          trailAt(bs.h, last.m.d + last.m.a + 4 + j * 7, tp);
-          const fl = 0.75 + 0.25 * Math.sin(t * 17 + j * 2.1), r = (12 - j * 1.4) * fl;
+          trailAt(bs.h, last.m.d + last.m.a + (4 + j * 7) * SZ, tp);
+          const fl = 0.75 + 0.25 * Math.sin(t * 17 + j * 2.1), r = (12 - j * 1.4) * fl * SZ;
           R.color(1, 0.45 + j * 0.05, 0.12, 0.5 - j * 0.05, 1); R.soft(tp[0], tp[1], r * 1.8);
           R.color(1, 0.85, 0.5, 0.5 - j * 0.06, 1); R.disc(tp[0], tp[1], r * 0.35);
         }
@@ -448,8 +452,8 @@
           const w = [];
           at(h, 25, 7 * sd, pa); w.push(pa[0], pa[1]);
           for (let d = 0; d <= 96; d += 8) {
-            trailAt(bs.h, d, tp);
-            const off = sd * (10 + d * 0.33 + 3.5 * Math.sin(t * 6 - d * 0.13)) * s;
+            trailAt(bs.h, d * SZ, tp);
+            const off = sd * (10 + d * 0.33 + 3.5 * Math.sin(t * 6 - d * 0.13)) * s * SZ;
             w.push(tp[0] - Math.sin(tp[2]) * off, tp[1] + Math.cos(tp[2]) * off);
           }
           for (let i = 0; i + 3 < w.length; i += 2) {
@@ -466,7 +470,7 @@
             tongue(b0[0], b0[1], b1[0], b1[1], m[0], m[1], tp2[0], tp2[1], mane, [1, 0.85, 0.4], 0.8 * s);
           }
         }
-        for (const sd of [-1, 1]) { at(h, 7, 9.5 * sd, pb); eye(pb[0], pb[1], 5.4 * s, bs, bs.eyeCol); }
+        for (const sd of [-1, 1]) { at(h, 7, 9.5 * sd, pb); eye(pb[0], pb[1], 5.4 * s * SZ, bs, bs.eyeCol); }
         // ноздри тлеют, перед выстрелом пасть разгорается
         at(h, 31, 0, pa);
         R.color(1, 0.5, 0.15, 0.25 + 0.1 * Math.sin(t * 13), 1); R.soft(pa[0], pa[1], 9);
@@ -558,7 +562,7 @@
       for (const tn of bs.tents) tn.chain = tn.chain.map(m => bs.parts.find(k => k.m === m));
     };
     let s = 1, cx = 360, cy = 250, cr = 1, sr = 0;
-    const at = (x, y, out) => { out[0] = cx + x * cr - y * sr; out[1] = cy + x * sr + y * cr; return out; };
+    const at = (x, y, out) => { out[0] = cx + (x * cr - y * sr) * SZ; out[1] = cy + (x * sr + y * cr) * SZ; return out; };
     const pa = [0, 0];
 
     bs.pose = dt => {
@@ -569,8 +573,8 @@
       const s2 = 1 + 0.06 * Math.sin(bs.ph - 0.7);
       let nx = 360 + 185 * Math.sin(0.19 * t + bs.p1), ny = 265 + 45 * Math.sin(0.33 * t + bs.p2);
       // пике: опускается к ракетке, щупальцами почти до неё, и тянется к ней вбок
-      ny += sink(bs, ny, 130) - 9 * Math.sin(bs.ph);
-      nx = clamp(lerp(nx, bs.fx, 0.55 * bs.dive), 125, 595);
+      ny += sink(bs, ny, 130 * SZ) - 9 * Math.sin(bs.ph);
+      nx = clamp(lerp(nx, bs.fx, 0.55 * bs.dive), 140, 580);
       const vx = bs.cx === null ? 0 : (nx - bs.cx) / dt;
       bs.cx = nx; cx = nx; cy = ny;
       if (bs.dying) { cx += (Math.random() - 0.5) * 4; cy += (Math.random() - 0.5) * 4; }
@@ -598,10 +602,10 @@
       });
     };
     bs.fire = g => {
-      const c = bs.core, n = rage(bs) ? 7 : 5;
+      const c = bs.core, n = rage(bs) ? 7 : 5, y = c.y + 18 * SZ;
       for (let i = 0; i < n; i++) {
-        const [vx, vy] = aim(g, c.x, c.y + 18, shotSpeed(bs, 150), (i - (n - 1) / 2) * 0.26);
-        bs.api.shoot(c.x, c.y + 18, vx, vy, 'spore', bs.sporeCol);
+        const [vx, vy] = aim(g, c.x, y, shotSpeed(bs, 150), (i - (n - 1) / 2) * 0.26);
+        bs.api.shoot(c.x, y, vx, vy, 'spore', bs.sporeCol);
       }
       bs.api.sfx('bossShot', 'spore', pan(c.x));
     };
@@ -617,7 +621,7 @@
       R.lit(0);
       R.color(c1[0], c1[1], c1[2], 0.13 * a, 1); R.poly(dome);
       at(0, -30, pa);
-      R.color(c2[0], c2[1], c2[2], 0.2 * a * (0.75 + 0.25 * Math.sin(bs.ph)), 1); R.soft(pa[0], pa[1], 120 * s);
+      R.color(c2[0], c2[1], c2[2], 0.2 * a * (0.75 + 0.25 * Math.sin(bs.ph)), 1); R.soft(pa[0], pa[1], 120 * s * SZ);
       // нити щупалец
       for (const tn of bs.tents) {
         const r = tn.r, pts = [];
@@ -643,8 +647,8 @@
         R.color(lc[0], lc[1], lc[2], tw * a, 1); R.disc(pa[0], pa[1], 2);
       }
       if (c.alive && c.show > 0) {
-        eye(c.x, c.y, 12.5 * c.show, bs, bs.eyeCol);
-        chargeFx(bs, c.x, c.y + 18, bs.sporeCol, t);
+        eye(c.x, c.y, 12.5 * c.show * SZ, bs, bs.eyeCol);
+        chargeFx(bs, c.x, c.y + 18 * SZ, bs.sporeCol, t);
       }
       hpBar(bs);
     };
@@ -652,7 +656,7 @@
       const c = bs.core;
       if (!c.alive || c.show <= 0) return;
       const e = 1.6 + 3 * bs.charge, k = bs.eyeCol;
-      R.color(k[0] * e, k[1] * e, k[2] * e, 1); R.disc(c.x, c.y, 8);
+      R.color(k[0] * e, k[1] * e, k[2] * e, 1); R.disc(c.x, c.y, 8 * SZ);
     };
     return bs;
   }
@@ -714,7 +718,7 @@
       bs.wingHp = bs.wings.reduce((s, k) => s + k.maxHp, 0);
     };
     let cx = 360, cy = 250, cr = 1, sr = 0;
-    const at = (x, y, out) => { out[0] = cx + x * cr - y * sr; out[1] = cy + x * sr + y * cr; return out; };
+    const at = (x, y, out) => { out[0] = cx + (x * cr - y * sr) * SZ; out[1] = cy + (x * sr + y * cr) * SZ; return out; };
     const phi = u => WAMP * Math.sin(bs.ph - 1.3 * u) * u;
     // Видимый размах до доли u: крыло изогнуто волной, и в проекции каждый его кусок короче в cos(φ) раз
     const span = u => { let x = 0; for (let i = 0; i < 6; i++) x += Math.cos(phi(((i + 0.5) / 6) * u)); return WROOT + (WSPAN * u * x) / 6; };
@@ -734,10 +738,10 @@
       bs.ph += (rage(bs) ? 3.4 : 2.4) * (1 + 0.6 * (1 - bs.lift)) * dt * (bs.dying ? 0.35 : 1);
       bs.mt += dt;
       const t = bs.mt;
-      let nx = 360 + 112 * Math.sin(0.26 * t + bs.p1), ny = 305 + 50 * Math.sin(0.52 * t + bs.p2) + 110 * (1 - bs.lift);
-      // пике: скользит к ракетке и тянется к ней вбок
-      ny += sink(bs, ny, 70) + 5 * Math.sin(bs.ph);
-      nx = clamp(lerp(nx, bs.fx, 0.5 * bs.dive), 230, 490);
+      let nx = 360 + 98 * Math.sin(0.26 * t + bs.p1), ny = 320 + 50 * Math.sin(0.52 * t + bs.p2) + 110 * (1 - bs.lift);
+      // пике: скользит к ракетке и тянется к ней вбок; концы крыльев (236 px от середины) не уходят в стены
+      ny += sink(bs, ny, 70 * SZ) + 5 * Math.sin(bs.ph);
+      nx = clamp(lerp(nx, bs.fx, 0.5 * bs.dive), 262, 458);
       const vx = bs.cx === null ? 0 : (nx - bs.cx) / dt;
       bs.cx = nx; cx = nx; cy = ny;
       if (bs.dying) { cx += (Math.random() - 0.5) * 4; cy += (Math.random() - 0.5) * 4; }
@@ -788,7 +792,7 @@
       const c1 = bs.c1, c2 = lighter(bs.c2, 0.35);
       R.lit(0);
       at(0, 0, pa);
-      R.color(c2[0], c2[1], c2[2], 0.16 * a, 1); R.soft(pa[0], pa[1], 95);
+      R.color(c2[0], c2[1], c2[2], 0.16 * a, 1); R.soft(pa[0], pa[1], 95 * SZ);
       // перепонки крыльев и неоновая передняя кромка
       for (const sd of [-1, 1]) {
         const v = [], lead = [];
@@ -807,7 +811,7 @@
     bs.over = t => {
       const c = bs.core;
       if (c.alive && c.show > 0) {
-        eye(c.x, c.y, 10 * c.show, bs, bs.eyeCol);
+        eye(c.x, c.y, 10 * c.show * SZ, bs, bs.eyeCol);
         tips.forEach((q, i) => { if (armed[i]) chargeFx(bs, q[0], q[1], bs.dartCol, t); });
         if (brow()) { at(0, 36, pa); chargeFx(bs, pa[0], pa[1], bs.dartCol, t); }
       }
@@ -825,7 +829,7 @@
       const c = bs.core;
       if (!c.alive || c.show <= 0) return;
       const k = bs.eyeCol, e = 1.6 + 3 * bs.charge;
-      R.color(k[0] * e, k[1] * e, k[2] * e, 1); R.disc(c.x, c.y, 6.5);
+      R.color(k[0] * e, k[1] * e, k[2] * e, 1); R.disc(c.x, c.y, 6.5 * SZ);
       if (bs.charge > 0) tips.forEach((q, i) => { if (!armed[i]) return; const d = bs.dartCol, f = 5 * bs.charge; R.color(d[0] * f, d[1] * f, d[2] * f, 1); R.disc(q[0], q[1], 5); });
     };
     return bs;
@@ -919,7 +923,7 @@
     bs.gazeT = 0; bs.open = 0; bs.aimX = 0; bs.aimY = 900; bs.aimed = false;
     bs.rain = []; bs.code = 0b1011001110001011; bs.codeT = 0;
     let cx = 360, cy = 280, cr = 1, sr = 0;
-    const at = (x, y, out) => { out[0] = cx + x * cr - y * sr; out[1] = cy + x * sr + y * cr; return out; };
+    const at = (x, y, out) => { out[0] = cx + (x * cr - y * sr) * SZ; out[1] = cy + (x * sr + y * cr) * SZ; return out; };
     const pa = [0, 0], pb = [0, 0];
     // Откуда смотрит взгляд: живые фонари, а без них — третий глаз
     const srcs = [], sl = [{ col: [0, 0, 0] }, { col: [0, 0, 0] }];
@@ -934,10 +938,10 @@
     bs.pose = (dt, g) => {
       bs.mt += dt;
       const t = bs.mt, p = g.paddle;
-      let nx = 360 + 150 * Math.sin(0.21 * t + bs.p1), ny = 290 + 30 * Math.sin(0.37 * t + bs.p2);
+      let nx = 360 + 130 * Math.sin(0.21 * t + bs.p1), ny = 310 + 30 * Math.sin(0.37 * t + bs.p2);
       // пике: опускается к ракетке, тянется к ней вбок
-      ny += sink(bs, ny, 125);
-      nx = clamp(lerp(nx, bs.fx, 0.5 * bs.dive), 165, 555);
+      ny += sink(bs, ny, 125 * SZ);
+      nx = clamp(lerp(nx, bs.fx, 0.5 * bs.dive), 185, 535);
       const vx = bs.cx === null ? 0 : (nx - bs.cx) / dt;
       bs.cx = nx; cx = nx; cy = ny;
       if (bs.dying) { cx += (Math.random() - 0.5) * 4; cy += (Math.random() - 0.5) * 4; }
@@ -998,7 +1002,7 @@
       if (bs.open <= 0 || !bs.core.alive) return [];
       return sources().slice(0, 2).map((k, i) => {
         const a = beamAng(k), s = sl[i], e = 45 * bs.open;
-        s.x = k.x + Math.cos(a) * 72; s.y = k.y + Math.sin(a) * 72; s.r = 4; s.ang = a; s.half = GAZE_HALF * bs.open; s.soft = 0.35;
+        s.x = k.x + Math.cos(a) * 72 * SZ; s.y = k.y + Math.sin(a) * 72 * SZ; s.r = 4; s.ang = a; s.half = GAZE_HALF * bs.open; s.soft = 0.35;
         s.col[0] = GREEN[0] * e; s.col[1] = GREEN[1] * e; s.col[2] = GREEN[2] * e;
         return s;
       });
@@ -1009,14 +1013,14 @@
       if (a <= 0) return;
       R.lit(0);
       at(0, -10, pa);
-      R.color(0.2, 0.7, 0.3, 0.16 * a, 1); R.soft(pa[0], pa[1], 130);
+      R.color(0.2, 0.7, 0.3, 0.16 * a, 1); R.soft(pa[0], pa[1], 130 * SZ);
       // хребты змей — светящиеся нити, двоичный дождь
       for (const sn of bs.snakes) {
         const r = sn.r, pts = [];
         for (let j = 0; j <= r.n; j++) pts.push(r.x[j], r.y[j]);
         strand(pts, GREEN, 0.35 * a, 1.6);
       }
-      for (const q of bs.rain) glyph(q.d, q.x, q.y, 6, 0.5 * a * Math.min(1, q.life / 0.6), 0);
+      for (const q of bs.rain) glyph(q.d, q.x, q.y, 6 * SZ, 0.5 * a * Math.min(1, q.life / 0.6), 0);
     };
     bs.over = t => {
       const c = bs.core;
@@ -1024,9 +1028,9 @@
       // цифры на ячейках и головы змей с языками
       for (const sn of bs.snakes) for (const k of sn.chain) {
         if (!k.alive || k.show <= 0) continue;
-        if (k.boss === 'cell') { glyph(k.m.bit, k.x, k.y, 9 * k.show, k.show * (0.75 + 0.25 * Math.sin(t * 9 + k.x)), 3.2); continue; }
-        const ca = Math.cos(k.ang), sa = Math.sin(k.ang);
-        for (const sd of [-1, 1]) { R.color(1, 0.25, 0.2, k.show, 1); R.disc(k.x + ca * 2 - sa * sd * 3, k.y + sa * 2 + ca * sd * 3, 1.3); }
+        if (k.boss === 'cell') { glyph(k.m.bit, k.x, k.y, 9 * k.show * SZ, k.show * (0.75 + 0.25 * Math.sin(t * 9 + k.x)), 3.2); continue; }
+        const ca = Math.cos(k.ang) * SZ, sa = Math.sin(k.ang) * SZ;
+        for (const sd of [-1, 1]) { R.color(1, 0.25, 0.2, k.show, 1); R.disc(k.x + ca * 2 - sa * sd * 3, k.y + sa * 2 + ca * sd * 3, 1.3 * SZ); }
         if (Math.sin(t * 7 + k.x * 0.1) > 0.2) {
           const tx = k.x + ca * 10, ty = k.y + sa * 10, ex = tx + ca * 6, ey = ty + sa * 6;
           R.color(1, 0.3, 0.35, 0.9, 1); R.line(tx, ty, ex, ey, 1);
@@ -1035,17 +1039,18 @@
       }
       if (c.alive && c.show > 0) {
         // бегущий код вместо рта
-        for (let i = 0; i < 5; i++) { at(-12 + i * 6, 20, pa); glyph((bs.code >> i) & 1, pa[0], pa[1], 6 * c.show, 0.9 * c.show, 2.4); }
+        for (let i = 0; i < 5; i++) { at(-12 + i * 6, 20, pa); glyph((bs.code >> i) & 1, pa[0], pa[1], 6 * c.show * SZ, 0.9 * c.show, 2.4); }
         // фонари: линза разгорается с зарядом и взглядом
         const heat = Math.max(bs.charge, bs.open);
         for (const k of bs.lamps) {
           if (!k.alive || k.show <= 0) continue;
-          R.color(GREEN[0], GREEN[1], GREEN[2], (0.25 + 0.5 * heat) * k.show, 1); R.soft(k.x, k.y, 16 + 26 * heat);
-          R.color(0.02, 0.06, 0.03, 1); R.disc(k.x, k.y, 8.5 * k.show);
-          R.color(0.5 + 0.4 * heat, 1, 0.55 + 0.35 * heat, 1, 1); R.disc(k.x, k.y, (3.5 + 3.5 * heat) * k.show);
-          R.color(0.6, 1, 0.7, 0.7, 1); R.ring(k.x, k.y, 8.5 * k.show, 0.2);
+          const z = k.show * SZ;
+          R.color(GREEN[0], GREEN[1], GREEN[2], (0.25 + 0.5 * heat) * k.show, 1); R.soft(k.x, k.y, (16 + 26 * heat) * SZ);
+          R.color(0.02, 0.06, 0.03, 1); R.disc(k.x, k.y, 8.5 * z);
+          R.color(0.5 + 0.4 * heat, 1, 0.55 + 0.35 * heat, 1, 1); R.disc(k.x, k.y, (3.5 + 3.5 * heat) * z);
+          R.color(0.6, 1, 0.7, 0.7, 1); R.ring(k.x, k.y, 8.5 * z, 0.2);
         }
-        eye(c.x, c.y, 9 * c.show, bs, bs.eyeCol);
+        eye(c.x, c.y, 9 * c.show * SZ, bs, bs.eyeCol);
         // прицел: пунктир бежит от глаз к ракетке, пока взгляд заряжается
         if (bs.charging) {
           for (const k of sources()) {
@@ -1076,9 +1081,9 @@
       const c = bs.core;
       if (!c.alive || c.show <= 0) return;
       const e = 1.6 + 3 * bs.charge, k = bs.eyeCol;
-      R.color(k[0] * e, k[1] * e, k[2] * e, 1); R.disc(c.x, c.y, 6);
+      R.color(k[0] * e, k[1] * e, k[2] * e, 1); R.disc(c.x, c.y, 6 * SZ);
       const h = 1.2 + 4 * Math.max(bs.charge, bs.open);
-      for (const l of bs.lamps) if (l.alive && l.show > 0) { R.color(GREEN[0] * h, GREEN[1] * h, GREEN[2] * h, 1); R.disc(l.x, l.y, 5); }
+      for (const l of bs.lamps) if (l.alive && l.show > 0) { R.color(GREEN[0] * h, GREEN[1] * h, GREEN[2] * h, 1); R.disc(l.x, l.y, 5 * SZ); }
     };
     return bs;
   }

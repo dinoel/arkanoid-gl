@@ -19,7 +19,7 @@ function rig(style = 'synthwave', seed = 1234, intensity = 0.5) {
   const AK = sandbox.window.AK;
   const synth = {};
   for (const name of [...tonal, ...drums, 'init', 'setTempo', 'expression', 'gate', 'stop', 'dip', 'sweep', 'lpPath',
-    'setLp', 'hpReset', 'hpSweep', 'throw', 'swell', 'riser', 'downlift']) {
+    'setLp', 'hpReset', 'hpSweep', 'throw', 'swell', 'riser', 'downlift', 'liveDrums', 'want']) {
     synth[name] = (...args) => { if (tonal.includes(name) || drums.includes(name)) calls.push({ name, args }); };
   }
   AK.MSynth = synth; AK.A = { playing: true, musicOn: true };

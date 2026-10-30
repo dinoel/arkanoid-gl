@@ -176,6 +176,40 @@
     noise({ f: 1400, q: 1.2, d: 0.03, vol: 0.22 * v, pan });
     noise({ ft: 'lowpass', f: 1100, f2: 220, q: 0.7, a: 0.008, d: big ? 0.22 : 0.14, vol: 0.16 * v, pan });
   };
+  // Стекло: звон — россыпь коротких высоких колокольчиков и шорох осколков
+  A.glass = (p, pan) => {
+    if (!A.ready || !gate('glass', 0.03)) return;
+    const v = clamp(p / 800, 0.35, 1), t = ctx.currentTime;
+    for (let i = 0; i < 4; i++) bell(2300 + Math.random() * 2600, 0.035 * v, pan, 0.22 + Math.random() * 0.2, 2.76, 0.6, t + i * 0.018 + Math.random() * 0.01);
+    noise({ ft: 'highpass', f: 4500, q: 0.7, d: 0.12, vol: 0.14 * v, pan });
+    noise({ f: 2500, q: 1.5, d: 0.03, vol: 0.12 * v, pan });
+  };
+  // Живой кирпич зарастил трещину: два мягких тона вверх по аккорду
+  A.heal = pan => {
+    if (!A.ready || !gate('heal', 0.1)) return;
+    const t = ctx.currentTime;
+    tone({ f: A.note(3), d: 0.18, vol: 0.05, pan, type: 'triangle' });
+    tone({ t: t + 0.07, f: A.note(5), d: 0.26, vol: 0.05, pan, type: 'triangle' });
+  };
+  // Кристалл разбит: переливчатое арпеджио по тонам аккорда
+  A.chime = pan => {
+    if (!A.ready || !gate('chime', 0.08)) return;
+    const t = ctx.currentTime;
+    [0, 2, 4, 7, 9].forEach((s, i) => bell(A.note(6 + s), 0.07, pan, 0.6, 3.5, 1.1, t + i * 0.045));
+  };
+  // Рыбка проглотила мяч: глухой «бульк» вниз и пузырёк вверх
+  A.gulp = pan => {
+    if (!A.ready || !gate('gulp', 0.08)) return;
+    const t = ctx.currentTime;
+    tone({ f: 420, f2: 150, d: 0.14, glide: 0.12, vol: 0.22, pan });
+    tone({ t: t + 0.06, f: 520, f2: 1250, d: 0.07, glide: 0.06, vol: 0.08, pan, type: 'triangle' });
+  };
+  // Рыбка выплюнула мяч: «пфф» — шум, взлетающий вверх, и тон за ним
+  A.spit = pan => {
+    if (!A.ready || !gate('spit', 0.08)) return;
+    noise({ f: 900, f2: 2600, q: 1.1, a: 0.005, d: 0.09, vol: 0.2, pan });
+    tone({ f: 260, f2: 820, d: 0.1, glide: 0.09, vol: 0.14, pan, type: 'triangle' });
+  };
   A.steel = (p, pan) => {
     if (!A.ready || !gate('steel', 0.04)) return;
     const v = clamp(p / 800, 0.2, 1);

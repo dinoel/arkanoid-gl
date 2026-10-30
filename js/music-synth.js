@@ -1,8 +1,10 @@
 'use strict';
 // Инструменты процедурной музыки: синтезированные барабаны, басы (саб, пила, acid, reese, FM, 808,
-// треугольник), пэды, аккордовые стабы, плаки для арпеджио, лиды, эффекты и сайдчейн-дакинг.
+// треугольник), пэды, аккордовые стабы, плаки для арпеджио, лиды, эффекты и сайдчейн-дакинг. Живые ударные,
+// пианино, маримба, вибрафон, калимба и саксофон — записи (music-samples.js); пока они грузятся, звучит синтез.
 (function (AK) {
   const S = {};
+  const Smp = AK.MSamples;
   let ctx, noiseBuf, pulse25, pulse12, pianoBody, pianoAir, kit, delayRight, transport, color;
   let busDrums, busBass, busDirt, busSynth, duck, delaySend, revSend, fbGain;
   let fbBase = 0.36;
@@ -47,6 +49,7 @@
 
   S.init = function (c, dest, reverb, noise) {
     ctx = c; noiseBuf = noise; ports = new Map(); active.clear(); openHat = null;
+    if (Smp) Smp.init(c);
     kit = AK.MKit.create(c);
     S.out = gain(0.27, dest);
     transport = gain(1, S.out);
@@ -218,6 +221,23 @@
     src.connect(g); src.start(t); src._end = t + src.buffer.duration; src.stop(src._end);
     return g;
   }
+  // Живые ударные (записи) вместо синтезированных малого, хэтов, шейкера, томов, тарелки и перкуссии; бочка —
+  // всегда синтез. Песня выбирает, какой у неё комплект (S.liveDrums)
+  let live = false;
+  S.liveDrums = on => { live = !!on; if (live && Smp) Smp.want('drums'); };
+  const liveOk = () => live && Smp && Smp.ready('drums');
+  // громкость групп — по синтезу, который они заменяют (средняя мощность удара); конги — тихая подкладка
+  const LIVE_LV = { closed: 0.16, open: 0.18, snare: 1, rim: 1, clap: 1.3, shaker: 0.35, tom: 0.9, crash: 0.9,
+    tumba: 0.12, conga: 0.12, quinto: 0.12, slap: 0.12 };
+  function liveHit(t, group, vel, pan = 0, rev = 0, rate = 1) {
+    const s = Smp.drum(group, vel), src = keep(ctx.createBufferSource());
+    src.buffer = s.buf; src.playbackRate.value = rate;
+    const g = vout(busDrums, pan, 0, rev);
+    g.gain.setValueAtTime(Math.max(0, vel) * LIVE_LV[group], t);
+    src.connect(g); src._end = t + (s.buf.duration - s.off) / rate; src.start(t, s.off); src.stop(src._end);
+    return g;
+  }
+
   S.kick = (t, vel, kind) => {
     if (kind !== 'chip') {
       sampleHit(t, kind === 'soft' ? 'soft' : 'punch', vel);
@@ -240,6 +260,7 @@
   };
 
   S.snare = (t, vel, kind) => {
+    if (kind !== 'chip' && liveOk()) { liveHit(t, kind === 'clap' || kind === 'rim' ? kind : 'snare', vel, 0.06, 0.16); return; }
     if (kind !== 'chip') { sampleHit(t, kind === 'clap' || kind === 'rim' ? kind : 'snare', vel * 0.9, 0.06, 0.16); return; }
     nhit(t, { type: 'lowpass', f: 7000, d: 0.13, vol: 0.5 * vel, rate: 0.22 });
   };
@@ -249,22 +270,28 @@
       try { cancelFrom(openHat.gain, t); openHat.gain.setTargetAtTime(0.0001, t, 0.008); } catch (e) { /* уже отыграл */ }
       openHat = null;
     }
-    const g = sampleHit(t, open ? 'open' : 'closed', vel * (open ? 0.53 : 0.64), open ? 0.28 : -0.18);
+    const g = liveOk() ? liveHit(t, open ? 'open' : 'closed', vel, open ? 0.28 : -0.18)
+      : sampleHit(t, open ? 'open' : 'closed', vel * (open ? 0.53 : 0.64), open ? 0.28 : -0.18);
     if (open) openHat = g;
   };
 
   S.tom = (t, vel, f) => {
+    // живой том один (110 Гц); высоты заливки 110…260 Гц сжаты, чтобы не пищал
+    if (liveOk()) { liveHit(t, 'tom', vel, (f - 150) / 250, 0.25, Math.sqrt(f / 110)); return; }
     const o = osc('sine', f, t, t + 0.45);
     o.frequency.exponentialRampToValueAtTime(f * 0.55, t + 0.28);
     const g = vout(busDrums, (f - 150) / 250, 0, 0.25); o.connect(g); perc(g.gain, t, 0.002, 0.6 * vel, 0.32);
     nhit(t, { f: f * 4, q: 1, d: 0.03, vol: 0.12 * vel });
   };
   S.crash = (t, vel) => {
+    if (liveOk()) { liveHit(t, 'crash', vel, 0, 0.5); return; }
     nhit(t, { type: 'highpass', f: 4500, q: 0.5, d: 1.8, vol: 0.2 * vel, rev: 0.5, a: 0.002 });
     nhit(t, { f: 7500, q: 0.8, d: 0.9, vol: 0.1 * vel });
   };
-  S.shaker = (t, vel) => sampleHit(t, 'shaker', vel * 0.5, 0.38);
+  S.shaker = (t, vel) => (liveOk() ? liveHit(t, 'shaker', vel, 0.38) : sampleHit(t, 'shaker', vel * 0.5, 0.38));
   S.perc = (t, vel, f) => {
+    // живая перкуссия — конги: чем выше тон, тем меньше барабан
+    if (liveOk()) { liveHit(t, f < 600 ? 'tumba' : f < 760 ? 'conga' : f < 950 ? 'quinto' : 'slap', vel, -0.3, 0.1); return; }
     const o = osc('square', f, t, t + 0.12), b = filt('bandpass', f * 1.5, 4);
     const g = vout(busDrums, -0.3, 0.25, 0.1); o.connect(b); b.connect(g); perc(g.gain, t, 0.001, 0.22 * vel, 0.06);
   };
@@ -452,6 +479,12 @@
   // Velocity-sensitive keys: a damped harmonic body + a short hammer layer, or FM tines.
   // PeriodicWave is bandlimited by Web Audio; two or three oscillators per key keep chords inexpensive.
   function keys(t, midi, dur, vel, kind, pan) {
+    if (kind === 'piano' && has('piano')) {
+      // мягкое касание — тише и глуше; верхние ноты у пианино тихие, подтягиваем их к синтезу
+      const touch = Math.max(0.1, Math.min(1.2, vel)), hi = 1 + Math.max(0, midi - 66) / 24;
+      played('piano', t, midi, dur, 0.34 * touch * hi, pan, 0.12, 0.28, 0.18, { lp: 1800 + 7000 * touch * touch });
+      return;
+    }
     const f = mtof(midi), release = kind === 'piano' ? 0.16 : 0.24, end = t + dur + release + 0.03;
     const g = vout(busSynth, pan, 0.12, 0.28), body = osc('sine', f, t, end);
     const touch = Math.max(0.1, Math.min(1.2, vel));
@@ -496,9 +529,46 @@
     hold(g.gain, t, 0.004, (0.07 * vel * 3) / Math.max(3, midis.length), dur, 0.08);
   };
 
+  // ---------- Записанные ноты ----------
+  const has = name => Smp && Smp.ready(name);
+  // Песня заранее просит записи своих инструментов (piano, vibes, …); остальные имена мимо
+  S.want = kinds => { if (Smp) for (const k of kinds) Smp.want(k); };
+  // Нота записи: ближайший семпл, ускоренный до midi. Звучит, пока длится нота, потом гаснет за rel (но не дольше
+  // самой записи). o.lp — фильтр (глуше), o.glide — подъезд с ноты, o.vib — вибрато в центах
+  function played(name, t, midi, dur, peak, pan, send, rev, rel, o) {
+    const s = Smp.note(name, midi), src = keep(ctx.createBufferSource());
+    src.buffer = s.buf;
+    if (o.glide != null) {
+      src.playbackRate.setValueAtTime(s.rate * Math.pow(2, (o.glide - midi) / 12), t);
+      src.playbackRate.exponentialRampToValueAtTime(s.rate, t + 0.07);
+    } else src.playbackRate.value = s.rate;
+    const g = vout(busSynth, pan, send, rev);
+    let node = src;
+    if (o.lp) { const f = filt('lowpass', o.lp, 0.7); src.connect(f); node = f; }
+    node.connect(g);
+    if (o.vib && src.detune) {
+      const lfo = osc('sine', 5 + Math.random(), t, t + dur + rel), lg = keep(ctx.createGain());
+      lg.gain.setValueAtTime(0, t); lg.gain.linearRampToValueAtTime(o.vib, t + Math.min(dur, 0.5));
+      lfo.connect(lg); lg.connect(src.detune);
+    }
+    const left = (s.buf.duration - s.off) / s.rate, end = t + Math.min(left, dur + rel);
+    g.gain.setValueAtTime(peak, t);
+    if (dur < left) { g.gain.setValueAtTime(peak, t + dur); g.gain.setTargetAtTime(0, t + dur, rel / 4); }
+    src._end = end; src.start(t, s.off); src.stop(end);
+  }
+  // Удары молоточков и язычков: маримба, вибрафон, калимба звенят сами, сколько им положено. Громкость — в арпеджио
+  // и в мелодии (мелодия впереди), звон — сколько звучит после конца ноты
+  const MALLET = { marimba: [0.09, 0.36, 0.45], vibes: [0.07, 0.25, 1.1], kalimba: [0.2, 0.5, 0.8] };
+  function mallet(t, midi, dur, vel, kind, pan, lead) {
+    const [arp, mel, ring] = MALLET[kind];
+    played(kind, t, midi, dur, (lead ? mel : arp) * vel, pan, 0.18, 0.3, ring, {});
+  }
+
   // ---------- Плаки (арпеджио) ----------
   S.pluck = (t, midi, dur, vel, kind, pan) => {
     if (kind === 'piano' || kind === 'epiano') { keys(t, midi, Math.max(0.15, dur), vel * 0.8, kind, pan || 0); return; }
+    if (MALLET[kind] && has(kind)) { mallet(t, midi, dur, vel, kind, pan || 0); return; }
+    if (kind === 'vibes') kind = 'bell'; else if (kind === 'kalimba') kind = 'marimba'; // пока записи грузятся
     // нота живёт, пока слышна огибающая: арпеджио играет шестнадцатыми, и лишние полсекунды на каждую ноту
     // заметно добавляют звуковому потоку работы
     const life = kind === 'square' ? dur * 0.8 + 0.12 : kind === 'chip' ? dur * 0.85 + 0.05
@@ -535,6 +605,13 @@
   S.lead = (t, midi, dur, vel, kind, o) => {
     o = o || {};
     if (kind === 'piano' || kind === 'epiano') { keys(t, midi, dur, vel, kind, o.pan || 0); return; }
+    if (MALLET[kind] && has(kind)) { mallet(t, midi, dur, vel, kind, o.pan || 0, true); return; }
+    // саксофон записан без вибрато — добавляем своё, мягче синтезаторного
+    if (kind === 'sax' && has('sax')) {
+      played('sax', t, midi, dur, 0.12 * vel, o.pan || 0, 0.25, 0.32, 0.12, { glide: o.glide, vib: o.vib != null ? o.vib * 0.8 : 8 });
+      return;
+    }
+    if (kind === 'sax') kind = 'saw'; else if (kind === 'vibes') kind = 'sine'; else if (MALLET[kind]) kind = 'fm'; // пока грузятся
     const f = mtof(midi), end = t + dur + 0.35;
     const g = vout(busSynth, o.pan || 0, 0.3, 0.3);
     const lp = filt('lowpass', 6000, 1.2); lp.connect(g);

@@ -111,9 +111,7 @@
   uniform sampler2D u_light; uniform vec2 u_res; uniform vec3 u_amb; uniform float u_gi;
   // Вода (water.js): u_shore — y кромки в 64 узлах по ширине поля; u_wtex — рябь (r) и пена (g) на сетке,
   // которая занимает прямоугольник u_wg (x, y, ширина, высота в px поля); ниже u_wet пол ещё мокрый.
-  // Прожекторы для бликов — как u_sp/u_sd/u_sc в FS_MAIN, только излучение полное.
   uniform float u_won; uniform vec4 u_shore[16]; uniform sampler2D u_wtex; uniform vec4 u_wg; uniform float u_wet;
-  uniform int u_wn; uniform vec3 u_wp[${MAX_TOP}]; uniform vec4 u_wd[${MAX_TOP}]; uniform vec3 u_wc[${MAX_TOP}];
   // Ракетка в воде: u_hull — центр, полудлина и радиус (w = 0 — не в воде), u_hullm — высота мениска у борта
   // и ход (−1.5…1.5, у носа вода выше); как в draw.js (paddleWater)
   uniform vec4 u_hull; uniform vec2 u_hullm;
@@ -195,20 +193,6 @@
   }
   // Свет над водой (для пены и толщи): глобальный, а без него — ровный
   vec3 lightAt(vec2 uv) { return u_gi > 0.5 ? u_amb + texture(u_light, uv).rgb : vec3(0.1) + u_c2 * 0.06; }
-  // Блики прожекторов: склон ряби, обращённый к лампе, отражает её; ровная вода в луче слабо блестит
-  vec3 glints(vec2 wf, vec3 n) {
-    vec3 s = vec3(0.0);
-    for (int i = 0; i < ${MAX_TOP}; i++) {
-      if (i >= u_wn) break;
-      vec2 dv = wf - u_wp[i].xy;
-      float D = max(length(dv), 1.0);
-      float cone = smoothstep(u_wd[i].z, u_wd[i].w, dot(dv / D, u_wd[i].xy));
-      if (cone <= 0.0) continue;
-      float g = pow(clamp(dot(n.xy, -dv / D) * 5.0, 0.0, 1.0), 4.0);
-      s += u_wc[i] * cone * (0.03 * g + 0.0015) * (300.0 / (D + 300.0));
-    }
-    return s;
-  }
   // Вода в точке поля wf, на d px ниже кромки; p и uv — как у пола
   vec3 waterAt(vec2 wf, float d, vec2 p, vec2 uv) {
     float t = u_time;
@@ -218,17 +202,17 @@
     float hu = texture(u_wtex, tuv - vec2(0.0, tx.y)).r, hd = texture(u_wtex, tuv + vec2(0.0, tx.y)).r;
     vec2 grad = vec2(hr - hl, hd - hu) / (2.0 * u_wg.z * tx.x);
     float lap = hl + hr + hu + hd - 4.0 * c0.r;
-    // мелкая рябь от ветра — чтобы вода жила и в покое
-    vec2 wind = vec2(sin(wf.y * 0.13 + t * 1.9 + 2.0 * sin(wf.x * 0.031 + t * 0.4)),
-                     cos(wf.x * 0.11 - t * 1.6 + 2.0 * sin(wf.y * 0.043 - t * 0.3)));
+    // лёгкое медленное колыхание — чтобы вода жила и в покое
+    vec2 wind = vec2(sin(wf.y * 0.07 + t * 0.7 + 2.0 * sin(wf.x * 0.019 + t * 0.15)),
+                     cos(wf.x * 0.06 - t * 0.6 + 2.0 * sin(wf.y * 0.027 - t * 0.12)));
     float sh = smoothstep(0.0, 12.0, d); // у самой кромки слой тонкий
-    vec3 n = normalize(vec3(-(grad + wind * 0.035) * sh, 1.0));
+    vec3 n = normalize(vec3(-(grad * 0.7 + wind * 0.012) * sh, 1.0));
     // пол наклонён: слой толще с глубиной, и дно смещается сильнее
     float dep = d * 0.35;
     vec2 off = n.xy * min(dep, 30.0) * 1.2;
     vec3 fl = floorAt(p + off, uv + vec2(off.x, -off.y) / vec2(720.0, 960.0));
-    // каустика: рябь собирает свет под гребнями, в покое по дну бегут прожилки
-    float caus = (caustic(wf + off, t) * 0.6 + clamp(-lap * 0.45, -0.4, 1.0)) * smoothstep(2.0, 30.0, d);
+    // каустика: рябь собирает свет под гребнями, в покое по дну медленно ползут бледные прожилки
+    float caus = (caustic(wf + off, t * 0.45) * 0.22 + clamp(-lap * 0.2, -0.15, 0.35)) * smoothstep(2.0, 30.0, d);
     fl *= 1.0 + caus;
     if (u_gi < 0.5) fl += caus * vec3(0.015, 0.04, 0.05);
     // толща: красное гаснет быстрее, и вода становится бирюзовой; свет в ней рассеивается
@@ -236,15 +220,15 @@
     vec3 tr = exp(-vec3(0.05, 0.016, 0.012) * dep);
     vec3 col = fl * tr + vec3(0.08, 0.32, 0.4) * (Lw + 0.05) * (1.0 - tr);
     if (u_gi > 0.5) col = shoulder(col);
-    // отражение зала: склон ряби, обращённый к условному свету (вверх-влево, как у фасок кирпичей), светлее,
-    // отвёрнутый — темнее; так круги и след видны и вне лучей прожекторов
+    // отражение зала: склон ряби, обращённый к условному свету (вверх-влево, как у фасок кирпичей), чуть светлее,
+    // отвёрнутый — темнее; так круги и след видны, но без бликов
     float facing = dot(n.xy, vec2(-0.45, -0.89));
-    col += vec3(0.16, 0.3, 0.36) * clamp(facing * 3.0, -0.25, 1.0) * sh + vec3(0.0, 0.025, 0.035) * sh;
+    col += vec3(0.06, 0.12, 0.14) * clamp(facing * 2.0, -0.2, 0.5) * sh + vec3(0.0, 0.025, 0.035) * sh;
     // пена — у кромки и там, где были всплески; шум рвёт её на клочья
     float nz = vn(wf * 0.18 + vec2(t * 0.6, -t * 0.4)) * 0.6 + vn(wf * 0.45 - t * 0.9) * 0.4;
     float fv = smoothstep(0.35, 0.75, (c0.g * 0.9 + exp(-d / 3.5)) * (0.55 + 0.9 * nz));
     col = mix(col, vec3(0.8, 0.92, 1.0) * (Lw * 1.2 + 0.14), fv * 0.85);
-    return col + glints(wf, n) * smoothstep(0.0, 6.0, d);
+    return col;
   }
   // Мокрый пол выше кромки: темнее и чуть синее; полоса, откуда вода ушла, сохнет постепенно
   vec3 wetFloor(vec3 col, vec2 wf, float d) {
@@ -542,22 +526,11 @@
     }
   };
 
-  // Вода в этом кадре (задаётся до R.begin): w — AK.Water или null, lights — прожекторы для бликов,
-  // как у R.topLights. Рябь и пена уходят в текстуру RG16F на четвёртом блоке.
-  // hull — ракетка в воде: [x, y, полудлина, радиус, высота мениска, ход] или null.
-  const wat = { w: null, n: 0, p: new Float32Array(MAX_TOP * 3), d: new Float32Array(MAX_TOP * 4), c: new Float32Array(MAX_TOP * 3), hull: null };
+  // Вода в этом кадре (задаётся до R.begin): w — AK.Water или null. Рябь и пена уходят в текстуру RG16F
+  // на четвёртом блоке. hull — ракетка в воде: [x, y, полудлина, радиус, высота мениска, ход] или null.
+  const wat = { w: null, hull: null };
   let wTex = null, wTw = 0, wTh = 0;
-  R.water = function (w, lights, hull = null) {
-    wat.w = w; wat.hull = hull;
-    if (!w) return;
-    wat.n = Math.min(lights.length, MAX_TOP);
-    for (let i = 0; i < wat.n; i++) {
-      const s = lights[i];
-      wat.p.set([s.x, s.y, s.r], i * 3);
-      wat.d.set([Math.cos(s.ang), Math.sin(s.ang), Math.cos(s.half), Math.cos(s.half * (1 - s.soft))], i * 4);
-      wat.c.set(s.col, i * 3);
-    }
-  };
+  R.water = function (w, hull = null) { wat.w = w; wat.hull = hull; };
   function waterUniforms() {
     const w = wat.w, u = pBg.u;
     // сэмплер воды смотрит в свой блок всегда: по умолчанию он смотрел бы в нулевой, где лежит цель рендера
@@ -581,8 +554,6 @@
     const hl = wat.hull;
     gl.uniform4f(u.u_hull, hl ? hl[0] : 0, hl ? hl[1] : 0, hl ? hl[2] : 0, hl ? hl[3] : 0);
     gl.uniform2f(u.u_hullm, hl ? hl[4] : 0, hl ? hl[5] : 0);
-    gl.uniform1i(u.u_wn, wat.n);
-    if (wat.n) { gl.uniform3fv(u.u_wp, wat.p); gl.uniform4fv(u.u_wd, wat.d); gl.uniform3fv(u.u_wc, wat.c); }
   }
 
   function flush() {
@@ -655,9 +626,12 @@
   // и на него светят прожекторы (см. R.topLights).
   R.lit = (k = 0, ox = 0, oy = 0, top = 0) => { cl = k; clx = ox; cly = oy; clt = top; };
 
-  // add: 0 — обычное смешивание, 1 — аддитивное (свечение)
-  R.color = (r, g, b, a = 1, add = 0) => { cr = r * a; cg = g * a; cb = b * a; ca = a * (1 - add); };
-  R.color2 = (r, g, b, a = 1, add = 0) => { dr = r * a; dg = g * a; db = b * a; da = a * (1 - add); };
+  // add: 0 — обычное смешивание, 1 — аддитивное (свечение). R.fade(f) делает всё, что рисуется дальше, в f раз
+  // прозрачнее (стекло, призрачные кирпичи); R.fade(1) — обратно.
+  let fade = 1;
+  R.fade = f => { fade = f; };
+  R.color = (r, g, b, a = 1, add = 0) => { a *= fade; cr = r * a; cg = g * a; cb = b * a; ca = a * (1 - add); };
+  R.color2 = (r, g, b, a = 1, add = 0) => { a *= fade; dr = r * a; dg = g * a; db = b * a; da = a * (1 - add); };
 
   R.tri = (x0, y0, x1, y1, x2, y2) => {
     ensure(3);
@@ -680,6 +654,18 @@
     ensure(6);
     vert(x0, y0, cr, cg, cb, ca, 0, 0, 0); vert(x1, y1, cr, cg, cb, ca, 0, 0, 0); vert(x2, y2, dr, dg, db, da, 0, 0, 0);
     vert(x0, y0, cr, cg, cb, ca, 0, 0, 0); vert(x2, y2, dr, dg, db, da, 0, 0, 0); vert(x3, y3, dr, dg, db, da, 0, 0, 0);
+  };
+
+  // Четырёхугольник сетки: вершины i0…i3 из xy (x, y), у каждой свой цвет из rgba (r, g, b, a) — плавная
+  // светотень по объёмному телу
+  function mv(xy, c, i) {
+    const a = c[i * 4 + 3] * fade;
+    vert(xy[i * 2], xy[i * 2 + 1], c[i * 4] * a, c[i * 4 + 1] * a, c[i * 4 + 2] * a, a, 0, 0, 0);
+  }
+  R.quadM = (xy, rgba, i0, i1, i2, i3) => {
+    ensure(6);
+    mv(xy, rgba, i0); mv(xy, rgba, i1); mv(xy, rgba, i2);
+    mv(xy, rgba, i0); mv(xy, rgba, i2); mv(xy, rgba, i3);
   };
 
   R.poly = v => {

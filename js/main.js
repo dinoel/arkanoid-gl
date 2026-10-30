@@ -38,6 +38,7 @@
       set('combo', G.combo >= 3 ? G.combo : 0, v => { el.combo.textContent = v ? `КОМБО ×${v}` : ''; });
       let pw = '';
       for (const k in POWER_LABELS) if (G.pw[k] > 0) pw += `<span>${POWER_LABELS[k]} ${Math.ceil(G.pw[k])}</span>`;
+      for (const f of G.fishes) if (f.left > 0) pw += `<span>РЫБКА ${Math.ceil(f.left)}</span>`;
       set('pw', pw, v => { el.powers.innerHTML = v; });
       const mi = AK.A.playing && AK.A.musicOn ? '♪ ' + AK.Music.info() : '';
       set('music', mi, v => { el.music.textContent = v; });
