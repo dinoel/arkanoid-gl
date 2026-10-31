@@ -17,9 +17,11 @@
   const POWER_LABELS = { expand: 'ШИРЕ', slow: 'МЕДЛЕННО', laser: 'ЛАЗЕР', fire: 'ОГОНЬ' };
 
   AK.UI = {
-    banner(title, sub, dur) {
+    // low — ниже обычного, под картиной (уровень-картина)
+    banner(title, sub, dur, low) {
       $('bannerTitle').textContent = title;
       $('bannerSub').textContent = sub || '';
+      banner.style.top = low ? '68%' : '';
       banner.style.opacity = 1;
       clearTimeout(bannerTimer);
       bannerTimer = setTimeout(() => { banner.style.opacity = 0; }, (dur || 2.5) * 1000);

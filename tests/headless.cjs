@@ -23,7 +23,7 @@ function game(seed = 1, { water = false } = {}) {
   const AK = sandbox.window.AK;
   AK.A = { newSong() {}, magnet() {}, playing: false };
   AK.UI = { banner() {}, gameOver() {} };
-  for (const file of ['levelgen.js', 'boss.js', 'water.js', 'seabed.js', 'fish.js', 'fish-top.js', 'game.js']) load(file);
+  for (const file of ['art.js', 'levelgen.js', 'boss.js', 'water.js', 'seabed.js', 'fish.js', 'fish-top.js', 'game.js']) load(file);
   AK.Water.on = water; // the water sim is most of the cost; off unless the test needs it
   return AK;
 }

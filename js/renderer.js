@@ -1,6 +1,6 @@
 'use strict';
 // WebGL2-рендерер: пакетная отрисовка треугольников (сплошные, мягкие спрайты, AA-диски, шаровое
-// затенение), процедурный фон, глобальное освещение (gi.js), HDR-bloom в два уровня и финальный композит.
+// затенение, снимок картины), процедурный фон, глобальное освещение (gi.js), HDR-bloom в два уровня и финальный композит.
 (function (AK) {
   const W = 720, H = 960;
   const R = { W, H, ok: false };
@@ -27,6 +27,7 @@
   // прожекторы для верха кирпичей: xy — источник (px поля со встряской), z — его радиус; xy — ось луча,
   // zw — косинусы внешнего и внутреннего края конуса; излучение
   uniform int u_ns; uniform vec3 u_sp[${MAX_TOP}]; uniform vec4 u_sd[${MAX_TOP}]; uniform vec3 u_sc[${MAX_TOP}];
+  uniform sampler2D u_art; // снимок картины (R.image)
   out vec4 o;
   float lum(vec3 c) { return dot(c, vec3(0.3, 0.5, 0.2)); }
   // Прямой свет прожекторов на верх кирпича. На пол свет считают каскады, и кирпич его заслоняет; но лампы
@@ -50,6 +51,9 @@
   }
   vec4 shape() {
     float m = v_uv.z;
+    // производные — до ветвления: внутри него они не определены
+    vec2 tdx = dFdx(v_uv.xy), tdy = dFdy(v_uv.xy);
+    if (m < -0.5) return v_col * textureGrad(u_art, v_uv.xy, tdx, tdy);
     if (m < 0.5) return v_col;
     float d = length(v_uv.xy);
     if (m < 1.5) { float f = clamp(1.0 - d, 0.0, 1.0); return v_col * (f * f); }
@@ -373,6 +377,8 @@
     pBlur = program(VS_FULL, FS_BLUR);
     pComp = program(VS_FULL, FS_COMP);
     uView = pMain.u.u_view;
+    gl.useProgram(pMain.p);
+    gl.uniform1i(pMain.u.u_art, ART_UNIT);
 
     vao = gl.createVertexArray();
     gl.bindVertexArray(vao);
@@ -437,6 +443,29 @@
   // R.gi — считается ли свет в этом кадре; R.giOn — выбор игрока; R.amb — рассеянный свет, который есть везде.
   R.gi = false; R.giOn = true; R.giAvailable = false; R.giDebug = -1; R.amb = [0.1, 0.105, 0.13];
   R.toggleGI = () => { R.giOn = !R.giOn; return R.giOn && R.giAvailable; };
+
+  // ---- Картина ----
+  // Снимок картины (art.js) — текстура на блоке ART_UNIT, который больше никто не занимает: привязана раз и
+  // навсегда. R.setArt(img) загружает снимок (тот же — ничего не делает); false — браузер его не дал: страница
+  // открыта файлом, и снимок для WebGL чужой. R.image рисует его в прямоугольник, умножая на цвет (R.color).
+  const ART_UNIT = 5;
+  let artTex = null, artSrc = null, artOk = false;
+  R.setArt = function (img) {
+    if (img === artSrc) return artOk;
+    artSrc = img; artOk = false;
+    if (!artTex) artTex = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE0 + ART_UNIT);
+    gl.bindTexture(gl.TEXTURE_2D, artTex);
+    try {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, img);
+      gl.generateMipmap(gl.TEXTURE_2D);
+      artOk = true;
+    } catch (e) { console.warn('Снимок картины недоступен:', e.message); }
+    for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR],
+      [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+    gl.activeTexture(gl.TEXTURE0); // иначе следующая привязка где-нибудь ещё (gi.js) займёт блок картины
+    return artOk;
+  };
 
   // ---- Время видеокарты ----
   // Сколько видеокарта на самом деле рисует кадр (EXT_disjoint_timer_query_webgl2, если браузер его даёт):
@@ -682,6 +711,12 @@
   };
   R.quad = (x0, y0, x1, y1, x2, y2, x3, y3) => { R.tri(x0, y0, x1, y1, x2, y2); R.tri(x0, y0, x2, y2, x3, y3); };
   R.rect = (x, y, w, h) => R.quad(x, y, x + w, y, x + w, y + h, x, y + h);
+  // Снимок картины (R.setArt) в прямоугольнике
+  R.image = (x, y, w, h) => {
+    ensure(6);
+    vert(x, y, cr, cg, cb, ca, 0, 0, -1); vert(x + w, y, cr, cg, cb, ca, 1, 0, -1); vert(x + w, y + h, cr, cg, cb, ca, 1, 1, -1);
+    vert(x, y, cr, cg, cb, ca, 0, 0, -1); vert(x + w, y + h, cr, cg, cb, ca, 1, 1, -1); vert(x, y + h, cr, cg, cb, ca, 0, 1, -1);
+  };
 
   // Квадрат с градиентом по вертикали: color сверху, color2 снизу.
   R.rectV = (x, y, w, h) => {

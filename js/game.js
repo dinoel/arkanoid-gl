@@ -73,13 +73,16 @@
   const REGEN_T = 3.2;
   const PHASE_ON = 3.4, PHASE_FADE = 0.45, PHASE_OFF = 1.7, PHASE_T = PHASE_ON + PHASE_OFF + 2 * PHASE_FADE;
   const ZONE_B = AK.LevelGen.bounds.B;
+  // Уровень пройден: пауза до следующего CLEAR_T с. У картины (levelgen.js → art) — ART_CLEAR: когда стена разбита,
+  // в зале за ART_LIGHTS с зажигается свет (G.reveal от 0 до 1) и картину дают рассмотреть.
+  const CLEAR_T = 2.6, ART_CLEAR = 6, ART_LIGHTS = 1.5;
 
   const G = {
     W, H, L, R: RX, T, HUD, WALL, PADDLE_Y,
     state: 'serve', demo: true, paused: false, time: 0, acc: 0, gravity: true, gview: 1,
     dry: 0, lure: 0, lureEach: 0, // с без попаданий; прибавка к Gm всего и на каждый бьющийся кирпич
     magnet: 0, magLock: false,    // сила магнита 0…1; кнопка, которой запустили мяч, магнит не включает
-    score: 0, lives: 3, level: 1, seed: 1, combo: 0, prevGen: null,
+    score: 0, lives: 3, level: 1, seed: 1, combo: 0, prevGen: null, reveal: 0,
     shake: 0, flash: 0, aberr: 0,
     bricks: [], balls: [], debris: [], particles: [], powerups: [], lasers: [], waves: [], explQ: [], popups: [],
     shots: [], boss: null, fishes: [],
@@ -96,7 +99,7 @@
   function makeBrick(s) {
     const local = s.local;
     const b = {
-      local, inset: P.inset(local, 4.5), orient: Math.sign(P.signedArea(local)) || 1,
+      local, inset: P.inset(local, s.bevel || 4.5), orient: Math.sign(P.signedArea(local)) || 1,
       circle: s.circle || 0, n: local.length / 2, rad: Math.max(P.radius(local), s.circle || 0),
       world: new Float32Array(local.length), worldIn: new Float32Array(local.length),
       bx: s.x, by: s.y, bang: s.ang || 0, x: s.x, y: s.y, ang: s.ang || 0, vx: 0, vy: 0, w: 0,
@@ -215,7 +218,7 @@
     G.streak = { n: 0, t: -9 };
     G.lure = G.lureEach = 0;
     G.magnet = 0;
-    G.levelTime = 0; G.combo = 0; G.acc = 0;
+    G.levelTime = 0; G.combo = 0; G.acc = 0; G.reveal = 0;
     Wt.reset();
     AK.Seabed.reset();
     if (!G.paddle) G.paddle = newPaddle();
@@ -1075,12 +1078,18 @@
 
     if (G.state === 'clear') {
       G.clearT -= dt;
+      if (G.lv.art) G.reveal = Math.min(1, G.reveal + dt / ART_LIGHTS);
       if (G.clearT <= 0) { G.level++; G.startLevel(); }
     } else if (rem === 0 && !G.explQ.length) {
       G.state = 'clear';
-      G.clearT = 2.6;
+      const art = G.lv.art && AK.Art.get(G.lv.art.id);
+      G.clearT = art ? ART_CLEAR : CLEAR_T;
       const bonus = 1000 + 250 * G.level;
-      if (!G.demo) { G.score += bonus; if (!G.boss) AK.UI.banner('УРОВЕНЬ ПРОЙДЕН', '+' + bonus, 2.4); } // у босса свой баннер
+      if (!G.demo) {
+        G.score += bonus;
+        if (art) AK.UI.banner(`«${art.title}»`, `${art.author}, ${art.year} · +${bonus}`, ART_CLEAR - 0.5, true);
+        else if (!G.boss) AK.UI.banner('УРОВЕНЬ ПРОЙДЕН', '+' + bonus, 2.4); // у босса свой баннер
+      }
       sfx('clear');
       if (Wt.on && Wt.level < H) sfx('drain');
       G.flash = 0.2;

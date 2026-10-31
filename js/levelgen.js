@@ -1,7 +1,7 @@
 'use strict';
 // Процедурная генерация уровней: семейства раскладок (сетка, соты, треугольная мозаика, вращающиеся кольца,
 // спиральная галактика, мозаика Пуассона, крепость, волна, мишень, пиксель-арт, паркет, механизм с роторами,
-// маятники, конвейер), зеркальная симметрия, маски из шума, особые кирпичи, сложность растёт с номером
+// маятники, конвейер, картина), зеркальная симметрия, маски из шума, особые кирпичи, сложность растёт с номером
 // уровня. Всё детерминировано сидом.
 (function (AK) {
   const { U, P } = AK;
@@ -714,6 +714,42 @@
     return out;
   }
 
+  // ---------- Картина: стена-мозаика поверх полотна (art.js) ----------
+  // Полотно портретное: высотой ART_H от верха раскладки, шириной — сколько выйдет при его пропорциях, по центру;
+  // по бокам остаётся проход, которым мяч заходит за стену. Кирпичи почти квадратные, ART_COLS в ряд; каждый —
+  // среднего цвета полотна под собой, только контрастнее по яркости (ART_CON, от средней яркости картины) и
+  // насыщеннее (ART_SAT): средние цвета мелких кусков сливаются, и без этого букет на стене не узнать. Самый
+  // светлый канал — не выше ART_MAX: почти белые кирпичи светились бы ореолом и сливались в одно пятно. Фаска
+  // у них уже обычной (ART_BEVEL) — на маленьком кирпиче она съела бы половину цвета.
+  // Из особых — только взрывные и кристаллы: сталь, броня и прочные кирпичи спрятали бы картину.
+  const ART_H = 480, ART_COLS = 14, ART_CON = 1.7, ART_SAT = 1.35, ART_MAX = 0.88, ART_BEVEL = 3;
+  const lum = c => 0.3 * c[0] + 0.5 * c[1] + 0.2 * c[2];
+  function art(rng, d) {
+    const out = [];
+    const id = AK.Art.ids[0], p = AK.Art.get(id);
+    const w = ART_H * p.aspect, x0 = CX - w / 2, y0 = B.T;
+    const rows = Math.round((ART_COLS * ART_H) / w), cw = w / ART_COLS, ch = ART_H / rows, gap = 3;
+    const local = P.rect(cw - gap, ch - gap), lm = lum(AK.Art.avg(id, 0, 0, 1, 1));
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < ART_COLS; c++) {
+        let col = AK.Art.avg(id, c / ART_COLS, r / rows, (c + 1) / ART_COLS, (r + 1) / rows);
+        const l = lum(col), k = Math.max(0.03, lm + (l - lm) * ART_CON) / Math.max(l, 1e-3);
+        col = col.map(v => v * k);
+        const m = (col[0] + col[1] + col[2]) / 3;
+        col = col.map(v => clamp(m + (v - m) * ART_SAT, 0, 1));
+        const top = Math.max(...col, ART_MAX);
+        const s = { local, x: x0 + (c + 0.5) * cw, y: y0 + (r + 0.5) * ch, ang: 0, key: [r, c], t: r / rows,
+          col: col.map(v => (v * ART_MAX) / top), kind: 'normal', hp: 1, bevel: ART_BEVEL };
+        const h = rng();
+        if (h < 0.03) { s.kind = 'explosive'; s.hp = 1; }
+        else if (h < 0.05) { s.kind = 'crystal'; s.hp = 2; }
+        out.push(s);
+      }
+    }
+    out.art = { id, x: x0, y: y0, w, h: ART_H };
+    return out;
+  }
+
   // ---------- Проверка подвижных кирпичей ----------
   // Подвижный кирпич не должен задевать соседей и выезжать за стены. Генераторы раскладывают их с запасом,
   // а здесь это проверяется: путь каждого прогоняется на SETTLE_T с вперёд, и из задевающей пары убирается
@@ -881,11 +917,11 @@
     return info.filter(it => !it.drop).map(it => it.s);
   }
 
-  const GENS = { grid, honeycomb, triangles, rings, spiral, mosaic, fortress, wave, dartboard, pixel, parquet, mechanism, pendulums, conveyor };
+  const GENS = { grid, honeycomb, triangles, rings, spiral, mosaic, fortress, wave, dartboard, pixel, parquet, mechanism, pendulums, conveyor, art };
   const NAMES_RU = {
     grid: 'Кладка', honeycomb: 'Соты', triangles: 'Призмы', rings: 'Кольца',
     spiral: 'Галактика', mosaic: 'Мозаика', fortress: 'Крепость', wave: 'Волна', dartboard: 'Мишень',
-    pixel: 'Пиксели', parquet: 'Паркет', mechanism: 'Механизм', pendulums: 'Маятники', conveyor: 'Конвейер',
+    pixel: 'Пиксели', parquet: 'Паркет', mechanism: 'Механизм', pendulums: 'Маятники', conveyor: 'Конвейер', art: 'Картина',
   };
 
   // Особые кирпичи появляются с ростом уровня (d — номер уровня от нуля):
@@ -1029,6 +1065,7 @@
   function pickGen(level, rng, prev) {
     if (level === 1) return 'grid';
     if (level === 2) return rng.pick(['honeycomb', 'triangles', 'wave', 'pixel', 'parquet']);
+    if (level === 3) return 'art'; // пока картина одна — на третьем уровне
     const opts = [['grid', 0.6], ['honeycomb', 0.8], ['triangles', 0.7], ['rings', 0.9], ['spiral', 0.8], ['mosaic', 1],
       ['fortress', level >= 4 ? 0.7 : 0], ['wave', 1], ['dartboard', 1], ['pixel', 0.9], ['parquet', 0.8],
       ['mechanism', 1.2], ['pendulums', 1.1], ['conveyor', level >= 5 ? 1.1 : 0]].filter(o => o[0] !== prev && o[1] > 0);
@@ -1047,11 +1084,13 @@
       const d = level - 1;
       const hue = rng();
       const spread = rng.range(0.15, 0.45) * (rng.chance(0.5) ? 1 : -1);
-      let gen, bricks;
+      let gen, bricks, art = null;
       for (let attempt = 0; attempt < 6; attempt++) {
         gen = forceGen || (attempt < 5 ? pickGen(level, rng, prevGen) : 'grid');
         const noise = U.noise(rng);
-        const raw = settle(GENS[gen](rng, d, noise));
+        const specs = GENS[gen](rng, d, noise);
+        art = specs.art || null; // полотно под стеной: какое и где
+        const raw = settle(specs);
         const kinds = raw.map(s => {
           if (s.kind) return [s.kind, s.hp];
           const k = kindOf(hash3(seedInt, s.key[0], s.key[1]), hash3(seedInt + 1, s.key[0], s.key[1]), d, s.boost || 1);
@@ -1073,12 +1112,14 @@
         });
         if (bricks.filter(b => b.kind !== 'steel').length >= 18) break;
       }
+      // у картины цвета уровня (пол, кромка поля, ракетка) — золотистые, под раму; название — когда стена разбита
+      const lh = art ? 0.1 : hue, ls = art ? 0.05 : spread;
       return {
-        bricks, gen, seedInt,
+        bricks, gen, seedInt, art,
         title: NAMES_RU[gen],
-        name: U.levelName(rng),
-        c1: U.hsl(hue, 0.7, 0.5),
-        c2: U.hsl(hue + spread * 0.5 + 0.08, 0.75, 0.55),
+        name: art ? 'что под стеной?' : U.levelName(rng),
+        c1: U.hsl(lh, 0.7, 0.5),
+        c2: U.hsl(lh + ls * 0.5 + 0.08, 0.75, 0.55),
         rng,
       };
     },
