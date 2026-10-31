@@ -72,49 +72,65 @@
   }
 
   // ---------- Качество под видеокарту ----------
-  // Раз в ~1,5 с (90 кадров) проверяем, успевает ли видеокарта. Частота экрана бывает любой (56, 60, 144 Гц),
-  // поэтому сравниваем с ней самой: 10-й перцентиль интервалов между кадрами — это период экрана, когда кадр
-  // успевает. Есть замер видеокарты (R.gpu) — смотрим на него: если она рисует кадр дольше 80% периода, кадры то
-  // и дело опаздывают к смене кадра экрана и игра дёргается, хотя средний FPS почти полный. Замера нет — по самим
-  // интервалам: медиана заметно больше периода или больше 5% кадров опоздали. В обоих случаях — и если всё
-  // медленнее ~40 кадров/с — качество на ступень ниже (lower). Обратно не повышаем, чтобы оно не скакало.
+  // Раз в ~1,5 с (90 кадров, а если кадры долгие — сколько их наберётся за 1,5 с, но не меньше 10) проверяем,
+  // успевает ли видеокарта. Частота экрана бывает любой (56, 60, 144 Гц), поэтому сравниваем с ней самой:
+  // 10-й перцентиль интервалов между кадрами — это период экрана, когда кадр успевает. Есть замер видеокарты
+  // (R.gpu) — смотрим на него: если она рисует кадр дольше 80% периода, кадры то и дело опаздывают к смене кадра
+  // экрана и игра дёргается, хотя средний FPS почти полный. Замера нет — по самим интервалам: медиана заметно
+  // больше периода или больше 5% кадров опоздали. В обоих случаях — и если всё медленнее ~40 кадров/с — качество
+  // на ступень ниже (lower). Обратно не повышаем, чтобы оно не скакало. Отдельные сорванные кадры перцентиль
+  // и медиана не замечают, а вот долгие кадры подряд — это и есть медленная машина, их не выбрасываем.
   // Всё это — только при «качество — авто» в настройках; иначе стоит выбранное там.
-  let dts = [], gms = [];
+  let dts = [], gms = [], span = 0, resumed = true;
   function adapt(dtMs) {
-    if (!AK.S.qAuto || dtMs > 100) return; // вручную, или вкладка была скрыта, или кадр сорвался по другой причине
-    dts.push(dtMs);
+    if (!AK.S.qAuto) return;
+    if (resumed) { resumed = false; return; } // первый кадр после запуска или скрытой вкладки — не в счёт
+    dts.push(dtMs); span += dtMs;
     if (R.gpu && R.gpu.frame > 0) gms.push(R.gpu.frame);
-    if (dts.length < 90) return;
+    if (dts.length < 90 && (span < 1500 || dts.length < 10)) return;
     dts.sort((a, b) => a - b);
     const p10 = dts[Math.floor(dts.length * 0.1)], med = dts[dts.length >> 1];
     let slow = p10 > 24;
-    if (gms.length >= 45) {
+    if (gms.length >= dts.length >> 1) {
       gms.sort((a, b) => a - b);
       slow = slow || gms[gms.length >> 1] > p10 * 0.8;
     } else slow = slow || med > p10 * 1.25 || dts.filter(d => d > p10 * 1.5).length > dts.length * 0.05;
-    dts = []; gms = [];
+    dts = []; gms = []; span = 0;
     if (slow) lower();
   }
   // Ступени: свет среднего качества, рисунок в полтора пикселя на точку вместо двух (на экранах с масштабом),
-  // свет низкого качества, рисунок в пиксель на точку. Свет выключен — его ступени пропускаются.
+  // свет низкого качества, рисунок в пиксель на точку; дальше — для слабых машин и рисования процессором:
+  // без света, без сглаживания, рисунок в ¾ и в ½ пикселя на точку. Свет выключен — его ступени пропускаются.
   function lower() {
-    const GI = AK.GI, dpr = window.devicePixelRatio || 1;
+    const GI = AK.GI, res = Math.min(window.devicePixelRatio || 1, renderCap);
     if (R.gi && GI.quality === 'high') GI.setQuality('medium');
-    else if (Math.min(dpr, renderCap) > 1.5) { renderCap = 1.5; resize(); }
+    else if (res > 1.5) { renderCap = 1.5; resize(); }
     else if (R.gi && GI.quality === 'medium') GI.setQuality('low');
-    else if (Math.min(dpr, renderCap) > 1) { renderCap = 1; resize(); }
+    else if (res > 1) { renderCap = 1; resize(); }
+    else if (R.gi) R.giOn = false;
+    else if (R.aa) { R.aa = false; resize(); }
+    else if (res > 0.75) { renderCap = 0.75; resize(); }
+    else if (res > 0.5) { renderCap = 0.5; resize(); }
     else return;
-    AK.Settings.sync(GI.quality, renderCap);
+    syncQuality();
   }
-  // Качество из настроек: вручную — ставим выбранное; авто — начинаем с лучшего и снова следим за видеокартой
+  // Качество из настроек: вручную — ставим выбранное; авто — начинаем с лучшего и снова следим за видеокартой.
+  // Рисует процессор (R.software) — авто начинает без света и сглаживания: со светом там пара кадров в секунду.
   function applyQuality() {
     const S = AK.S, GI = AK.GI;
-    renderCap = S.qAuto ? 2 : S.res;
-    if (GI.ready) GI.setQuality(S.qAuto ? 'high' : S.giQ);
-    dts = []; gms = [];
+    if (S.qAuto) {
+      renderCap = 2; R.giOn = R.aa = !R.software;
+      if (GI.ready) GI.setQuality(R.software ? 'low' : 'high');
+    } else {
+      renderCap = S.res; R.giOn = S.giQ !== 'off'; R.aa = !!S.aa;
+      if (GI.ready && R.giOn) GI.setQuality(S.giQ);
+    }
+    dts = []; gms = []; span = 0;
     resize();
-    AK.Settings.sync(GI.quality, renderCap);
+    syncQuality();
   }
+  // Панели настроек — что стоит на самом деле
+  const syncQuality = () => AK.Settings.sync(R.giOn ? AK.GI.quality : 'off', renderCap, R.aa ? 1 : 0);
   AK.Settings.onQuality = applyQuality;
 
   // ---------- Игра ----------
@@ -190,6 +206,7 @@
       }
       case 'KeyL': {
         const on = R.toggleGI();
+        syncQuality();
         if (!R.giAvailable) AK.UI.banner('СВЕТ', 'глобальное освещение не поддерживается этим браузером', 1.6);
         else AK.UI.banner(on ? 'ГЛОБАЛЬНОЕ ОСВЕЩЕНИЕ' : 'ПРОСТОЕ ОСВЕЩЕНИЕ', on ? 'мягкие тени, свет от всего, что светится' : 'как раньше', 1.4);
         break;
@@ -208,7 +225,7 @@
     keys[e.code] = false;
     if (e.code === 'Space') G.input.held = false;
   });
-  document.addEventListener('visibilitychange', () => { if (document.hidden) setPaused(true); });
+  document.addEventListener('visibilitychange', () => { resumed = true; if (document.hidden) setPaused(true); });
   window.addEventListener('resize', resize);
 
   // ---------- Старт ----------
@@ -237,7 +254,8 @@
       el.fps.textContent = `${Math.round((n * 1000) / fps.t)} FPS · худший кадр ${Math.round(fps.worst)} мс\n` +
         `процессор: логика ${(fps.upd / n).toFixed(1)} · рисунок ${(fps.draw / n).toFixed(1)} мс\n` +
         (R.gpu ? `видеокарта ${(fps.gpu / n).toFixed(1)} мс` + (R.gi ? `, из них свет ${(fps.gi / n).toFixed(1)}` : '') + '\n'
-          : 'видеокарта: замера нет\n') + `${res} · ${gi}`;
+          : R.software ? 'видеокарты нет: рисует процессор\n' : 'видеокарта: замера нет\n') +
+        `${res} · ${gi}` + (R.aa ? '' : ' · без сглаживания');
     }
     fps.n = fps.t = fps.worst = fps.upd = fps.draw = fps.gpu = fps.gi = 0;
   }

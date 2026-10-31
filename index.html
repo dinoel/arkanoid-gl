@@ -66,7 +66,7 @@
   #overlay .score { font-size: 1.6em; margin: .2em 0 1.5em; letter-spacing: .15em; }
   @keyframes pulse { 0%,100% { opacity: .45 } 50% { opacity: 1 } }
   #settings {
-    position: absolute; right: 3%; top: 8%; width: 18em; padding: .9em 1.1em 1em; box-sizing: border-box;
+    position: absolute; right: 3%; top: 8%; width: 19em; padding: .9em 1.1em 1em; box-sizing: border-box;
     background: rgba(6,9,22,.9); border: 1px solid rgba(140,180,255,.22); border-radius: .7em;
     box-shadow: 0 0 2em rgba(0,0,0,.6); font-size: .8em; letter-spacing: .04em; cursor: default;
     transition: opacity .2s;
@@ -87,9 +87,9 @@
   #settings .chk { display: flex; align-items: center; gap: .5em; cursor: pointer; }
   #settings .chk input { margin: 0; accent-color: #7fb6ff; cursor: pointer; }
   #settings .qual small { display: block; opacity: .45; font-size: .82em; margin: .25em 0 .6em; }
-  #settings .seg { display: flex; align-items: center; gap: .3em; margin-bottom: .4em; }
-  #settings .seg span { flex: 1; opacity: .85; }
-  #settings .seg button { padding: .15em .35em; }
+  #settings .seg { display: flex; flex-wrap: wrap; gap: .3em; margin-bottom: .5em; }
+  #settings .seg span { flex: 1 0 100%; opacity: .85; }
+  #settings .seg button { flex: 1 1 auto; padding: .15em .2em; }
   #settings .seg button.on { background: rgba(127,182,255,.32); border-color: #7fb6ff; color: #fff; }
   #settings .qual.auto .seg button { opacity: .55; }
   #settings kbd { padding: 0 .45em; border: 1px solid rgba(255,255,255,.35); border-radius: .3em; font-family: inherit; }

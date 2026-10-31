@@ -366,7 +366,13 @@
 
   R.init = function (cv) {
     canvas = cv;
-    gl = canvas.getContext('webgl2', { antialias: true, alpha: false, premultipliedAlpha: false });
+    // Сглаживание холсту ни к чему: на него ложится только композит во весь экран, а сцена сглажена своим
+    // MSAA-буфером (см. R.resize). Сначала просим контекст без «серьёзной потери скорости»: не дали — видеокарты
+    // нет (или браузер её не пускает) и рисует процессор (R.software); main.js тогда начинает с лёгкого качества.
+    const opts = { antialias: false, alpha: false, premultipliedAlpha: false };
+    gl = canvas.getContext('webgl2', { ...opts, failIfMajorPerformanceCaveat: true });
+    R.software = !gl;
+    if (!gl) gl = canvas.getContext('webgl2', opts);
     if (!gl) return false;
     hdr = !!gl.getExtension('EXT_color_buffer_float');
     tq = gl.getExtension('EXT_disjoint_timer_query_webgl2');
@@ -418,9 +424,10 @@
       a1: target(w2, h2), b1: target(w2, h2),
       a2: target(w4, h4), b2: target(w4, h4),
     };
-    // MSAA-буфер для сцены (рисуем в него, затем blit в текстуру)
+    // MSAA-буфер для сцены (рисуем в него, затем blit в текстуру); R.aa = false — без него: процессору,
+    // если рисует он, сглаживание обходится дороже всего, кроме света
     if (msaa) { gl.deleteRenderbuffer(msaa.rb); gl.deleteFramebuffer(msaa.fb); msaa = null; }
-    const samples = Math.min(4, gl.getParameter(gl.MAX_SAMPLES) || 0);
+    const samples = R.aa ? Math.min(4, gl.getParameter(gl.MAX_SAMPLES) || 0) : 0;
     if (samples > 1) {
       const rb = gl.createRenderbuffer();
       gl.bindRenderbuffer(gl.RENDERBUFFER, rb);
@@ -434,6 +441,7 @@
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   };
   let msaa = null;
+  R.aa = true; R.software = false;
 
   function full() { gl.bindVertexArray(fullVao); gl.drawArrays(gl.TRIANGLES, 0, 3); }
   function bindTex(unit, tex) { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, tex); }

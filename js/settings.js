@@ -17,16 +17,18 @@
     const v = saved[d.id];
     S[d.id] = typeof v === 'number' && isFinite(v) ? clamp(v, d.min || 0, d.max) : d.def;
   }
-  // Качество: свет (gi.js) и разрешение рисунка — пикселей на точку экрана с масштабом (main.js). При «авто» main.js
-  // сам снижает их, если видеокарта не успевает, и сообщает сюда (sync), на чём остановился; выбор вручную
-  // выключает авто
-  const GI_Q = [['high', 'высокое'], ['medium', 'среднее'], ['low', 'низкое']];
-  const RES = [[2, '×2'], [1.5, '×1.5'], [1, '×1']];
-  const QDEF = { qAuto: true, giQ: 'high', res: 2 };
+  // Качество: свет (gi.js), разрешение рисунка — пикселей на точку экрана (main.js) — и сглаживание (renderer.js).
+  // При «авто» main.js сам снижает их, если видеокарта не успевает, и сообщает сюда (sync), на чём остановился;
+  // выбор вручную выключает авто
+  const GI_Q = [['high', 'высокое'], ['medium', 'среднее'], ['low', 'низкое'], ['off', 'выкл']];
+  const RES = [[2, '×2'], [1.5, '×1.5'], [1, '×1'], [0.75, '×0.75'], [0.5, '×0.5']];
+  const AA = [[1, 'вкл'], [0, 'выкл']];
+  const QDEF = { qAuto: true, giQ: 'high', res: 2, aa: 1 };
   S.qAuto = saved.qAuto !== false;
   S.giQ = GI_Q.some(q => q[0] === saved.giQ) ? saved.giQ : QDEF.giQ;
   S.res = RES.some(r => r[0] === saved.res) ? saved.res : QDEF.res;
-  const cur = { giQ: S.giQ, res: S.res }; // что стоит на самом деле
+  S.aa = AA.some(a => a[0] === saved.aa) ? saved.aa : QDEF.aa;
+  const cur = { giQ: S.giQ, res: S.res, aa: S.aa }; // что стоит на самом деле
   function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* без хранилища — до перезагрузки */ } }
 
   // ---- Панель ----
@@ -53,15 +55,16 @@
     list.map(([v, t]) => `<button type="button" data-v="${v}">${t}</button>`).join('') + '</div>';
   qual.innerHTML = '<label class="chk"><input type="checkbox"><span>качество — авто</span></label>' +
     '<small>само снижает, если видеокарта не успевает</small>' +
-    seg('giQ', 'свет', GI_Q) + seg('res', 'разрешение', RES) +
-    '<small>разрешение — пикселей на точку, на экранах с масштабом; свет — при глобальном освещении (L)</small>';
+    seg('giQ', 'свет', GI_Q) + seg('res', 'разрешение', RES) + seg('aa', 'сглаживание', AA) +
+    '<small>свет — глобальное освещение (L); разрешение — пикселей на точку экрана, ×2 и ×1.5 — на экранах ' +
+    'с масштабом</small>';
   const chk = qual.querySelector('input');
   function showQ() {
     chk.checked = S.qAuto;
     qual.classList.toggle('auto', S.qAuto);
     for (const b of qual.querySelectorAll('button')) {
       const k = b.parentNode.dataset.k;
-      b.classList.toggle('on', String(S.qAuto ? cur[k] : S[k]) === b.dataset.v);
+      b.classList.toggle('on', String(cur[k]) === b.dataset.v);
     }
   }
   const setQ = () => { save(); showQ(); if (AK.Settings.onQuality) AK.Settings.onQuality(); };
@@ -70,7 +73,8 @@
     const b = e.target.closest('button');
     if (!b) return;
     const k = b.parentNode.dataset.k;
-    S.qAuto = false; S[k] = k === 'res' ? +b.dataset.v : b.dataset.v;
+    if (S.qAuto) Object.assign(S, cur); // из авто в ручное — от того, что стоит сейчас, а не от прошлого выбора
+    S.qAuto = false; S[k] = k === 'giQ' ? b.dataset.v : +b.dataset.v;
     setQ(); b.blur();
   });
   panel.appendChild(qual);
@@ -94,6 +98,6 @@
     get open() { return !panel.classList.contains('hidden'); },
     toggle(on = !this.open) { panel.classList.toggle('hidden', !on); return on; },
     onQuality: null, // main.js: применить качество из S
-    sync(giQ, res) { cur.giQ = giQ; cur.res = res; showQ(); }, // что стоит на самом деле
+    sync(giQ, res, aa) { cur.giQ = giQ; cur.res = res; cur.aa = aa; showQ(); }, // что стоит на самом деле
   };
 })(window.AK);
