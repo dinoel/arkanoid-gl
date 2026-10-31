@@ -105,7 +105,7 @@
       bx: s.x, by: s.y, bang: s.ang || 0, x: s.x, y: s.y, ang: s.ang || 0, vx: 0, vy: 0, w: 0,
       motion: s.motion || null, kind: s.kind, hp: s.hp, maxHp: s.hp, color: s.color, note: s.note,
       flash: 0, cracks: [], alive: true, dirty: true, phase: Math.random() * TAU, boss: s.boss || null,
-      armor: s.armor || null, heal: 0, sap: s.hp, vis: 1, phOff: s.phOff || 0,
+      armor: s.armor || null, heal: 0, sap: s.hp, vis: 1, phOff: s.phOff || 0, glow: s.glow || 0,
     };
     const area = s.circle ? Math.PI * s.circle * s.circle : Math.abs(P.signedArea(local));
     b.mass = b.mass0 = area * (s.density || (TOUGH[s.kind] ? 0.8 + 0.5 * s.hp : DENSITY[s.kind]));

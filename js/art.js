@@ -4,10 +4,31 @@
 // зажигается свет и видно название. У каждой картины есть уменьшенная копия px — w × h точек RGB по строкам,
 // в шестнадцатеричном виде: по ней считаются цвета кирпичей, и её же видно под стеной, пока снимок не загрузился
 // (или если браузер его не даёт — страница открыта файлом, без сервера).
+// Живая картина (levelgen.js → artLive) — та же стена, только головки на ней живые: heads — где они на снимке,
+// в точках снимка шириной ref (центр x, y и радиус r). Головка с w крутится (w — скорость, рад/с; в какую
+// сторону — решает сид), с px, py — кивает на стебле, качаясь вокруг этой его точки. look — какой подсолнух
+// из неё сложить, core — цвет серединки (виды и цвета — в levelgen.js, flower). Круги головок не задевают друг
+// друга даже в качании: кирпичи на них движутся, и генератор выбросил бы задетые.
 (function (AK) {
   const PAINTINGS = {
     sunflowers: {
       title: 'Подсолнухи', author: 'Винсент ван Гог', year: 1888, file: 'art/sunflowers.jpg', aspect: 3349 / 4226,
+      ref: 800,
+      heads: [
+        { x: 462, y: 110, r: 85, w: 0.45, look: 'fluffy', core: 'green' }, // верхняя, махровая
+        { x: 278, y: 172, r: 80, w: 0.5, look: 'double', core: 'amber' },
+        { x: 343, y: 285, r: 40, w: 0.8, look: 'button', core: 'green' }, // серединка, остальное закрыто соседками
+        { x: 458, y: 352, r: 72, w: 0.6, look: 'star', core: 'orange' }, // с оранжевой серединкой
+        { x: 722, y: 302, r: 62, w: 0.55, look: 'fluffy', core: 'amber' },
+        { x: 112, y: 287, r: 72, w: 0.5, look: 'seeds', core: 'brown' }, // слева, с тёмной серединкой
+        { x: 643, y: 472, r: 70, w: 0.55, look: 'seeds', core: 'orange' },
+        { x: 395, y: 582, r: 70, w: 0.4, look: 'fluffy', core: 'green' }, // большая над вазой
+        { x: 505, y: 520, r: 46, w: 0.7, look: 'button', core: 'orange' },
+        { x: 588, y: 262, r: 58, px: 540, py: 205, look: 'star', core: 'amber' }, // поникшая справа вверху
+        { x: 225, y: 465, r: 80, px: 310, py: 400, look: 'double', core: 'brown' }, // поникшая слева, с семенами
+        { x: 600, y: 712, r: 70, px: 530, py: 650, look: 'fluffy', core: 'orange' }, // увядшая у вазы справа
+        { x: 168, y: 722, r: 52, px: 205, py: 630, look: 'button', core: 'green' }, // увядшая слева внизу
+      ],
       w: 48, h: 60,
       px: [
         'dfd07fe4d584e3d580e7d984e7d982e5d780e5d57fe6d680e8d781e8d781e5d57fe2d27ce2d37ae1d279dcd277d9cf74d8cf76d8cf76d2cb74d1ca73d3cc73d4cd74d6cc6dcdc364d9cc70bbae52b4a858b2a656c7bb6dc1b567d7ce77d7ce77d5cc73d4cb72d5ca72d3c870d3cc76d3cc76d0c973d2cb75d1cb79d2cc7ad4cd76d2cb74d4cd77d1ca74cfc67bc6bd72',
@@ -101,11 +122,11 @@
   AK.Art = {
     ids: Object.keys(PAINTINGS),
     get: id => PAINTINGS[id],
-    // Средний цвет прямоугольника картины [u0, u1] × [v0, v1] (доли ширины и высоты): точки копии — с весом
-    // по площади, которой они в него попали
+    // Средний цвет прямоугольника картины [u0, u1] × [v0, v1] (доли ширины и высоты; что за краем — не в счёт):
+    // точки копии — с весом по площади, которой они в него попали
     avg(id, u0, v0, u1, v1) {
       const p = PAINTINGS[id], a = grid(p), out = [0, 0, 0];
-      const x0 = u0 * p.w, x1 = u1 * p.w, y0 = v0 * p.h, y1 = v1 * p.h;
+      const x0 = Math.max(0, u0 * p.w), x1 = Math.min(p.w, u1 * p.w), y0 = Math.max(0, v0 * p.h), y1 = Math.min(p.h, v1 * p.h);
       let s = 0;
       for (let y = Math.floor(y0); y < Math.min(p.h, Math.ceil(y1)); y++) {
         const wy = Math.min(y + 1, y1) - Math.max(y, y0);

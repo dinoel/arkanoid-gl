@@ -101,14 +101,42 @@
     const on = U.smooth(g.reveal), f = U.lerp(gi ? ART_DIM_GI : ART_DIM, ART_SHOW, on) * clamp((g.levelTime - 0.9) / 0.6, 0, 1);
     R.lit(gi ? ART_LIT * (1 - on) : 0);
     const im = AK.Art.image(a.id);
-    if (im.ready && R.setArt(im.img)) { R.color(f, f, f, 1); R.image(x, y, w, h); }
-    else {
+    if (im.ready && R.setArt(im.img)) {
+      R.color(f, f, f, 1); R.image(x, y, w, h);
+      if (a.heads) for (const hd of a.heads) liveHead(a, hd, f, g.levelTime);
+    } else {
       const p = AK.Art.get(a.id), px = AK.Art.grid(a.id), cw = w / p.w, ch = h / p.h;
       for (let r = 0, i = 0; r < p.h; r++) {
         for (let c = 0; c < p.w; c++, i += 3) { R.color(px[i] * f, px[i + 1] * f, px[i + 2] * f, 1); R.rect(x + c * cw, y + r * ch, cw + 0.3, ch + 0.3); }
       }
     }
     R.lit(0);
+  }
+
+  // Живая картина (levelgen.js → artLive): полотно под головкой повёрнуто на тот же угол, что и её кирпичи
+  // (P.turn), вокруг той же оси — у кивающей она на стебле. Снимок рисуется ещё раз кругом поверх полотна: внутри
+  // головки целиком, а за её краем, на ширине HEAD_FADE, растворяется в неподвижном полотне. Круг не выходит
+  // из рамки: точки за ней прижаты к краю.
+  const HEAD_FADE = 10, HEAD_SEG = 28;
+  const hxy = new Float32Array(8), huv = new Float32Array(8);
+  function liveHead(a, hd, f, t) {
+    const d = P.turn(hd.m, t), c = Math.cos(d), s = Math.sin(d), px = hd.m.cx, py = hd.m.cy;
+    const cx = px + (hd.cx - px) * c - (hd.cy - py) * s, cy = py + (hd.cx - px) * s + (hd.cy - py) * c;
+    // точка окружности радиуса rho в направлении j — где она на поле и какая точка снимка туда повернулась
+    const at = (rho, j, o) => {
+      const ph = (j / HEAD_SEG) * U.TAU;
+      const x = clamp(cx + rho * Math.cos(ph), a.x, a.x + a.w), y = clamp(cy + rho * Math.sin(ph), a.y, a.y + a.h);
+      const dx = x - px, dy = y - py;
+      hxy[o] = x; hxy[o + 1] = y;
+      huv[o] = (px + dx * c + dy * s - a.x) / a.w; huv[o + 1] = (py - dx * s + dy * c - a.y) / a.h;
+    };
+    for (const [r0, r1, a0, a1] of [[0, hd.R, 1, 1], [hd.R, hd.R + HEAD_FADE, 1, 0]]) {
+      R.color(f, f, f, a0); R.color2(f, f, f, a1);
+      for (let j = 0; j < HEAD_SEG; j++) {
+        at(r0, j, 0); at(r0, j + 1, 2); at(r1, j + 1, 4); at(r1, j, 6);
+        R.imageQuad(hxy, huv);
+      }
+    }
   }
 
   // ---------- Приманка ----------
@@ -139,6 +167,10 @@
   const SELF = { normal: 0.25, strong: 0.14, explosive: 0, steel: 0, glass: 0, armor: 0.2, regen: 0.3, crystal: 0.7, phase: 0.2 }; // собственное свечение кирпичей
   const SKY = [0.05, 0.055, 0.075];   // свет, приходящий из-за края экрана (снизу, из-под ракетки)
   const LIT_BRICK = 0.8;             // кирпич на 80% освещается и на 20% светится сам — всегда различим
+  // Без глобального освещения кирпич освещён ровным светом FLAT_LIGHT — столько в среднем достаётся ему от каскадов.
+  // Без этого он весь светился бы сам: стена вдвое ярче, чем со светом, и треть её выгорает до белого.
+  // У кирпича с glow (головки живой картины) эта доля освещения — его собственный свет.
+  const FLAT_LIGHT = 0.5, FLAT = 1 - LIT_BRICK + LIT_BRICK * FLAT_LIGHT;
 
   function giScene(g, t) {
     const { H, L, R: RX, T } = g;
@@ -318,7 +350,8 @@
     const fade = glass ? 0.6 : phase ? 0.1 + 0.9 * k.vis : 1;
     R.fade(fade);
 
-    const gi = R.gi;
+    const gi = R.gi, lit = LIT_BRICK * (1 - k.glow);
+    if (!gi) { const f = FLAT + (1 - FLAT) * k.glow; r *= f; gg *= f; b *= f; }
 
     // мягкое свечение вокруг (при глобальном освещении его даёт собственный свет кирпича)
     if (!gi) { R.color(r, gg, b, steel ? 0.04 : 0.09, 1); R.soft(k.x, k.y, k.rad * 2.1 * s); }
@@ -337,7 +370,7 @@
         // Свет берём снаружи ребра, и шейдер добавит своё: фаска, обращённая к настоящему источнику, светлее.
         const sh = 0.72 + 0.4 * d + shimmer;
         const hi = hardy || plate ? 0.14 * Math.max(0, d) ** 2 : 0.05 * Math.max(0, d);
-        R.lit(LIT_BRICK, nx * 4, ny * 4, 1);
+        R.lit(lit, nx * 4, ny * 4, 1);
         R.color(er * sh + hi, eg * sh + hi, eb * sh + hi, 1);
       } else {
         const sh = 0.6 + 0.55 * d + shimmer;
@@ -349,7 +382,7 @@
     // грань (у стекла — ещё прозрачнее фаски)
     if (glass) R.fade(0.32);
     if (gi) {
-      R.lit(LIT_BRICK, 0, 0, 1);
+      R.lit(lit, 0, 0, 1);
       R.color(r * 0.8, gg * 0.8, b * 0.8, 1);
       R.color2(r * 0.95, gg * 0.95, b * 0.95, 1);
       R.polyShade(wi, k.x, k.y, LX, LY, 0.15);
@@ -488,6 +521,7 @@
     R.color(0.1, 0.11, 0.16, 1); R.disc(x, y, r * 0.4);
   }
   function rigging(g) {
+    if (g.lv.art) return; // головки живой картины крутятся без осей
     if (rigFor !== g.bricks) { rigFor = g.bricks; rig = buildRig(g.bricks); }
     if (!rig.pend.length && !rig.tracks.length && !rig.axles.length) return;
     R.lit(R.gi ? 1 : 0);

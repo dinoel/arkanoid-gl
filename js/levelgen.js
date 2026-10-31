@@ -1,7 +1,7 @@
 'use strict';
 // Процедурная генерация уровней: семейства раскладок (сетка, соты, треугольная мозаика, вращающиеся кольца,
 // спиральная галактика, мозаика Пуассона, крепость, волна, мишень, пиксель-арт, паркет, механизм с роторами,
-// маятники, конвейер, картина), зеркальная симметрия, маски из шума, особые кирпичи, сложность растёт с номером
+// маятники, конвейер, картина и она же живая), зеркальная симметрия, маски из шума, особые кирпичи, сложность растёт с номером
 // уровня. Всё детерминировано сидом.
 (function (AK) {
   const { U, P } = AK;
@@ -720,34 +720,166 @@
   // среднего цвета полотна под собой, только контрастнее по яркости (ART_CON, от средней яркости картины) и
   // насыщеннее (ART_SAT): средние цвета мелких кусков сливаются, и без этого букет на стене не узнать. Самый
   // светлый канал — не выше ART_MAX: почти белые кирпичи светились бы ореолом и сливались в одно пятно. Фаска
-  // у них уже обычной (ART_BEVEL) — на маленьком кирпиче она съела бы половину цвета.
+  // у них уже обычной (ART_BEVEL) — на маленьком кирпиче она съела бы половину цвета; у мелких кирпичей головок
+  // живой картины (HEAD_BEVEL) ещё уже, иначе каждый — пирамидка, и пушистая головка выглядит колючей.
   // Из особых — только взрывные и кристаллы: сталь, броня и прочные кирпичи спрятали бы картину.
-  const ART_H = 480, ART_COLS = 14, ART_CON = 1.7, ART_SAT = 1.35, ART_MAX = 0.88, ART_BEVEL = 3;
+  //
+  // Живая картина (artLive) — та же стена, но головки на ней живые (art.js → heads): каждая — свой подсолнух
+  // из кирпичей (flower), который крутится или кивает на стебле целиком. Клетку стены, которую головка задела бы,
+  // заменяют четвертинки — те из них, что не задевают; в щелях видно полотно, а оно под головкой поворачивается
+  // вместе с ней (draw.js).
+  const ART_H = 480, ART_COLS = 14, ART_CON = 1.7, ART_SAT = 1.35, ART_MAX = 0.88, ART_BEVEL = 3, HEAD_BEVEL = 1.5;
   const lum = c => 0.3 * c[0] + 0.5 * c[1] + 0.2 * c[2];
-  function art(rng, d) {
+  // Цвет кирпича над прямоугольником полотна [u0, u1] × [v0, v1]; lm — средняя яркость картины
+  function artColor(id, lm, u0, v0, u1, v1) {
+    let col = AK.Art.avg(id, u0, v0, u1, v1);
+    const l = lum(col), k = Math.max(0.03, lm + (l - lm) * ART_CON) / Math.max(l, 1e-3);
+    col = col.map(v => v * k);
+    const m = (col[0] + col[1] + col[2]) / 3;
+    col = col.map(v => clamp(m + (v - m) * ART_SAT, 0, 1));
+    const top = Math.max(...col, ART_MAX);
+    return col.map(v => (v * ART_MAX) / top);
+  }
+  function artWall(rng, live) {
     const out = [];
     const id = AK.Art.ids[0], p = AK.Art.get(id);
     const w = ART_H * p.aspect, x0 = CX - w / 2, y0 = B.T;
     const rows = Math.round((ART_COLS * ART_H) / w), cw = w / ART_COLS, ch = ART_H / rows, gap = 3;
     const local = P.rect(cw - gap, ch - gap), lm = lum(AK.Art.avg(id, 0, 0, 1, 1));
+    const heads = live ? p.heads.map((hd, i) => head(rng, hd, i, w / p.ref, x0, y0, out)) : null;
+    // задела бы головка прямоугольник hw × hh с центром (x, y): расстояние от её центра до прямоугольника
+    const hit = (x, y, hw, hh) => heads && heads.some(hd =>
+      Math.hypot(Math.max(Math.abs(hd.cx - x) - hw, 0), Math.max(Math.abs(hd.cy - y) - hh, 0)) < hd.sweep + GAP);
+    const quarter = P.rect(cw / 2 - gap, ch / 2 - gap);
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < ART_COLS; c++) {
-        let col = AK.Art.avg(id, c / ART_COLS, r / rows, (c + 1) / ART_COLS, (r + 1) / rows);
-        const l = lum(col), k = Math.max(0.03, lm + (l - lm) * ART_CON) / Math.max(l, 1e-3);
-        col = col.map(v => v * k);
-        const m = (col[0] + col[1] + col[2]) / 3;
-        col = col.map(v => clamp(m + (v - m) * ART_SAT, 0, 1));
-        const top = Math.max(...col, ART_MAX);
-        const s = { local, x: x0 + (c + 0.5) * cw, y: y0 + (r + 0.5) * ch, ang: 0, key: [r, c], t: r / rows,
-          col: col.map(v => (v * ART_MAX) / top), kind: 'normal', hp: 1, bevel: ART_BEVEL };
+        const x = x0 + (c + 0.5) * cw, y = y0 + (r + 0.5) * ch;
+        if (hit(x, y, (cw - gap) / 2, (ch - gap) / 2)) {
+          for (let q = 0; q < 4; q++) {
+            const qc = c + 0.25 + 0.5 * (q & 1), qr = r + 0.25 + 0.5 * (q >> 1);
+            const qx = x0 + qc * cw, qy = y0 + qr * ch;
+            if (hit(qx, qy, (cw / 2 - gap) / 2, (ch / 2 - gap) / 2)) continue;
+            out.push({ local: quarter, x: qx, y: qy, ang: 0, key: [r, c * 4 + q + 100], t: r / rows, kind: 'normal', hp: 1, bevel: HEAD_BEVEL,
+              col: artColor(id, lm, (qc - 0.25) / ART_COLS, (qr - 0.25) / rows, (qc + 0.25) / ART_COLS, (qr + 0.25) / rows) });
+          }
+          continue;
+        }
+        const s = { local, x, y, ang: 0, key: [r, c], t: r / rows,
+          col: artColor(id, lm, c / ART_COLS, r / rows, (c + 1) / ART_COLS, (r + 1) / rows), kind: 'normal', hp: 1, bevel: ART_BEVEL };
         const h = rng();
         if (h < 0.03) { s.kind = 'explosive'; s.hp = 1; }
         else if (h < 0.05) { s.kind = 'crystal'; s.hp = 2; }
         out.push(s);
       }
     }
-    out.art = { id, x: x0, y: y0, w, h: ART_H };
+    out.art = { id, x: x0, y: y0, w, h: ART_H, heads };
     return out;
+  }
+  // генераторы зовутся с (rng, d, noise) — третий параметр у стены свой
+  const art = rng => artWall(rng, false), artLive = rng => artWall(rng, true);
+
+  // Головка hd живой картины (координаты снимка, sc — масштаб снимка к полю): кирпичи — в out, возвращает,
+  // где она и как движется: центр cx, cy, радиус R, движение m (orbit без r и a0 — у кирпичей они свои), вид look
+  // и sweep — радиус круга вокруг центра, который она заметает. Крутится — вокруг своего центра, в сторону
+  // и со скоростью от сида; кивает — вокруг точки стебля, на 3,5–5,5° туда-обратно за 4–5 с. Цвета у головки свои
+  // (flower), и наполовину (HEAD_GLOW) она светится сама: в ровном свете без собственного подсолнухи тусклые.
+  const HEAD_GLOW = 0.45;
+  function head(rng, hd, i, sc, x0, y0, out) {
+    const cx = x0 + hd.x * sc, cy = y0 + hd.y * sc, R = hd.r * sc;
+    const nod = hd.px != null, px = nod ? x0 + hd.px * sc : cx, py = nod ? y0 + hd.py * sc : cy;
+    const m = nod ? { type: 'orbit', cx: px, cy: py, w: 0, amp: rng.range(0.06, 0.095), f: rng.range(1.25, 1.6), ph: rng.range(0, TAU) }
+      : { type: 'orbit', cx, cy, w: hd.w * rng.range(0.85, 1.15) * (rng.chance(0.5) ? 1 : -1) };
+    const look = flower(cx, cy, R, hd, rng, (x, y, local, ang, col, extra) => {
+      out.push(place(Object.assign({
+        x, y, local, ang, key: [60 + i, out.length], t: 0.5, grp: 'head' + i, prio: 1, kind: 'normal', hp: 1, bevel: HEAD_BEVEL,
+        col, glow: HEAD_GLOW, motion: Object.assign({}, m, { r: Math.hypot(x - px, y - py), a0: Math.atan2(y - py, x - px) }),
+      }, extra)));
+    });
+    return { cx, cy, R, m, look, sweep: R + 2 + (nod ? m.amp * Math.hypot(cx - px, cy - py) : 0) };
+  }
+
+  // Подсолнух радиуса R из кирпичей с центром (cx, cy). Они на живой картине разные (art.js → heads, look):
+  //   seeds  — серединка из круглых семечек кольцами, по краю длинные острые лепестки;
+  //   fluffy — махровый: кольца секторов вперебежку, от серединки к краю всё желтее, лепестков не видно;
+  //   double — два ряда лепестков: внутренние короткие и широкие, наружные длинные и острые, между ними;
+  //   star   — крупная серединка и один ряд широких лепестков;
+  //   button — пуговка: серединка и кольцо секторов; такой выходит и любая головка меньше BUTTON_R.
+  // Цвета свои, светлее и желтее полотна (там головки охристые, и в стене выходили почти чёрными): серединка —
+  // CORE[core], лепестки — от лимонных до золотых (оттенок от сида), каждый кирпич чуть светлее или темнее
+  // соседа. add(x, y, local, ang, col, extra) кладёт кирпич; возвращает вид, который вышел.
+  const CORE = { orange: [1, 0.5, 0.1], amber: [0.95, 0.66, 0.14], green: [0.5, 0.74, 0.2], brown: [0.78, 0.4, 0.12] };
+  const LEMON = [1, 0.9, 0.28], GOLD = [1, 0.7, 0.1], BUTTON_R = 24;
+  const mix3 = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
+  function flower(cx, cy, R, hd, rng, add) {
+    const gap = 3, off = rng.range(0, TAU), core = CORE[hd.core] || CORE.amber, petal = mix3(LEMON, GOLD, rng());
+    const look = R < BUTTON_R ? 'button' : hd.look;
+    const tint = c => { const f = rng.range(0.9, 1.08); return c.map(v => clamp(v * f, 0, 1)); };
+    const at = (r, a) => [cx + Math.cos(a) * r, cy + Math.sin(a) * r];
+    const hub = r => add(cx, cy, P.ngon(12, r), 0, tint(core), { circle: r });
+    // кольца секторов от r0 до r1, по ~th толщиной; col(l, nr) — цвет кольца l из nr; соседние — вперебежку
+    const rings = (r0, r1, th, col) => {
+      const nr = Math.max(1, Math.round((r1 - r0 + gap) / (th + gap))), t = (r1 - r0 - gap * (nr - 1)) / nr;
+      for (let l = 0, a0 = r0; l < nr; l++, a0 += t + gap) {
+        const n = Math.max(5, Math.round((Math.PI * (2 * a0 + t)) / (t * 1.3))), da = gap / (2 * a0), a = off + (l * Math.PI) / n;
+        for (let j = 0; j < n; j++) {
+          const poly = P.sector(a0, a0 + t, a + (j * TAU) / n + da, a + ((j + 1) * TAU) / n - da);
+          const [gx, gy] = P.centroid(poly);
+          add(cx + gx, cy + gy, P.centered(poly), 0, tint(col(l, nr)));
+        }
+      }
+    };
+    // ряд лепестков от радиуса p0 длиной L, повёрнутый на a: у основания впритык (не уже 5 px), к концу сужаются
+    // до доли taper
+    const petals = (p0, L, a, taper, col) => {
+      const n = Math.max(6, Math.min(Math.round((TAU * p0) / Math.max(L * 0.75, 8)), Math.floor((TAU * p0) / (5 + gap))));
+      const wb = (TAU * p0) / n - gap;
+      for (let j = 0; j < n; j++) {
+        const b = a + ((j + 0.5) * TAU) / n, [x, y] = at(p0 + L / 2, b);
+        add(x, y, P.rot(P.trap(wb, wb * taper, L), Math.PI / 2), b, tint(col));
+      }
+      return n;
+    };
+    switch (look) {
+      case 'seeds': {
+        // семечки — кружки радиуса rs кольцами, через одно кольцо светлее
+        const rh = Math.max(4, R * 0.14), rs = Math.max(2.6, R * 0.08), sg = 1.5;
+        hub(rh);
+        let edge = rh;
+        for (let k = 0, r = rh + gap; r + 2 * rs <= R * 0.6; r += 2 * rs + sg, k++) {
+          const rc = r + rs, n = Math.floor((TAU * rc) / (2 * rs + sg)), a = off + k * 0.7;
+          const col = k % 2 ? mix3(core, GOLD, 0.4) : core;
+          for (let j = 0; j < n; j++) { const [x, y] = at(rc, a + (j * TAU) / n); add(x, y, P.ngon(8, rs), 0, tint(col), { circle: rs }); }
+          edge = r + 2 * rs;
+        }
+        petals(edge + gap, R - edge - gap, off, 0.25, petal);
+        break;
+      }
+      case 'fluffy': {
+        const rh = Math.max(5, R * 0.2), inner = mix3(core, GOLD, 0.4);
+        hub(rh);
+        rings(rh + gap, R, 7.5, (l, nr) => mix3(inner, petal, nr > 1 ? l / (nr - 1) : 1));
+        break;
+      }
+      case 'double': {
+        const rh = Math.max(5, R * 0.3), p0 = rh + gap, L1 = (R - p0) * 0.4;
+        hub(rh);
+        const n = petals(p0, L1, off, 0.65, mix3(petal, GOLD, 0.6));
+        petals(p0 + L1 + gap, R - p0 - L1 - gap, off + Math.PI / n, 0.3, petal);
+        break;
+      }
+      case 'star': {
+        const rh = R * 0.42;
+        hub(rh);
+        petals(rh + gap, R - rh - gap, off, 0.75, petal);
+        break;
+      }
+      default: { // button
+        const rh = Math.max(5, R * 0.32);
+        hub(rh);
+        rings(rh + gap, R, 10, () => petal);
+      }
+    }
+    return look;
   }
 
   // ---------- Проверка подвижных кирпичей ----------
@@ -917,11 +1049,11 @@
     return info.filter(it => !it.drop).map(it => it.s);
   }
 
-  const GENS = { grid, honeycomb, triangles, rings, spiral, mosaic, fortress, wave, dartboard, pixel, parquet, mechanism, pendulums, conveyor, art };
+  const GENS = { grid, honeycomb, triangles, rings, spiral, mosaic, fortress, wave, dartboard, pixel, parquet, mechanism, pendulums, conveyor, art, artLive };
   const NAMES_RU = {
     grid: 'Кладка', honeycomb: 'Соты', triangles: 'Призмы', rings: 'Кольца',
     spiral: 'Галактика', mosaic: 'Мозаика', fortress: 'Крепость', wave: 'Волна', dartboard: 'Мишень',
-    pixel: 'Пиксели', parquet: 'Паркет', mechanism: 'Механизм', pendulums: 'Маятники', conveyor: 'Конвейер', art: 'Картина',
+    pixel: 'Пиксели', parquet: 'Паркет', mechanism: 'Механизм', pendulums: 'Маятники', conveyor: 'Конвейер', art: 'Картина', artLive: 'Живая картина',
   };
 
   // Особые кирпичи появляются с ростом уровня (d — номер уровня от нуля):
@@ -1064,8 +1196,9 @@
 
   function pickGen(level, rng, prev) {
     if (level === 1) return 'grid';
-    if (level === 2) return rng.pick(['honeycomb', 'triangles', 'wave', 'pixel', 'parquet']);
-    if (level === 3) return 'art'; // пока картина одна — на третьем уровне
+    // пока картина одна: на втором уровне — стена-мозаика над ней, на третьем она оживает (а четвёртый — босс)
+    if (level === 2) return 'art';
+    if (level === 3) return 'artLive';
     const opts = [['grid', 0.6], ['honeycomb', 0.8], ['triangles', 0.7], ['rings', 0.9], ['spiral', 0.8], ['mosaic', 1],
       ['fortress', level >= 4 ? 0.7 : 0], ['wave', 1], ['dartboard', 1], ['pixel', 0.9], ['parquet', 0.8],
       ['mechanism', 1.2], ['pendulums', 1.1], ['conveyor', level >= 5 ? 1.1 : 0]].filter(o => o[0] !== prev && o[1] > 0);
@@ -1117,7 +1250,7 @@
       return {
         bricks, gen, seedInt, art,
         title: NAMES_RU[gen],
-        name: art ? 'что под стеной?' : U.levelName(rng),
+        name: gen === 'artLive' ? 'она оживает' : art ? 'что под стеной?' : U.levelName(rng),
         c1: U.hsl(lh, 0.7, 0.5),
         c2: U.hsl(lh + ls * 0.5 + 0.08, 0.75, 0.55),
         rng,

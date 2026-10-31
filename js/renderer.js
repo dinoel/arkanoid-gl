@@ -726,6 +726,16 @@
     vert(x, y, cr, cg, cb, ca, 0, 0, -1); vert(x + w, y + h, cr, cg, cb, ca, 1, 1, -1); vert(x, y + h, cr, cg, cb, ca, 0, 1, -1);
   };
 
+  // Кусок снимка картины: четырёхугольник с вершинами xy (x0, y0, …, x3, y3), у каждой своя точка снимка uv;
+  // первые две вершины цвета color, вторые две — color2 (как R.quadG), так кусок может растворяться к краю
+  R.imageQuad = (xy, uv) => {
+    ensure(6);
+    vert(xy[0], xy[1], cr, cg, cb, ca, uv[0], uv[1], -1); vert(xy[2], xy[3], cr, cg, cb, ca, uv[2], uv[3], -1);
+    vert(xy[4], xy[5], dr, dg, db, da, uv[4], uv[5], -1);
+    vert(xy[0], xy[1], cr, cg, cb, ca, uv[0], uv[1], -1); vert(xy[4], xy[5], dr, dg, db, da, uv[4], uv[5], -1);
+    vert(xy[6], xy[7], dr, dg, db, da, uv[6], uv[7], -1);
+  };
+
   // Квадрат с градиентом по вертикали: color сверху, color2 снизу.
   R.rectV = (x, y, w, h) => {
     ensure(6);
